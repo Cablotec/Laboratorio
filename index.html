@@ -1968,26 +1968,30 @@ async function ddtHashFile(file){
 }
 
 async function ddtAnalizza(file){
-  ddtStatus('🔄 Verifica documento...', 'processing');
+  ddtStatus('🔄 Controllo duplicato...', 'processing');
   document.getElementById('ddt-dropzone').classList.add('processing');
   try{
-    // Calcola hash e controlla duplicati
+    // Calcola hash PRIMA di sprecare token sull'AI
     var hash = await ddtHashFile(file);
+    ddtFileHash = null; // reset esplicito
     if(supa){
       var checkRes = await supa.from('ddt_hashes').select('filename,imported_at,imported_by').eq('hash', hash).limit(1);
-      var check = { data: (checkRes.data && checkRes.data.length > 0) ? checkRes.data[0] : null };
-      if(check.data){
-        var when = new Date(check.data.imported_at);
-        var msg = 'Documento gia importato!\n\nFile: '+check.data.filename+'\nData: '+fmtD(when.toISOString())+' '+fmtT(when)+'\nUtente: '+(check.data.imported_by||'sconosciuto')+'\n\nVuoi importarlo comunque?';
-        var confirm = window.confirm(msg);
-        if(!confirm){
-          ddtStatus('', '');
+      var existing = (checkRes.data && checkRes.data.length > 0) ? checkRes.data[0] : null;
+      if(existing){
+        var when = new Date(existing.imported_at);
+        var msg = 'Documento già importato!\n\nFile: '+existing.filename+'\nData: '+fmtD(when.toISOString())+' '+fmtT(when)+'\nUtente: '+(existing.imported_by||'sconosciuto')+'\n\nVuoi importarlo comunque?';
+        var proceed = window.confirm(msg);
+        if(!proceed){
+          ddtStatus('⚠️ Annullato (duplicato rilevato)', 'error');
           document.getElementById('ddt-dropzone').classList.remove('processing');
           return;
         }
+        ddtStatus('⚠️ Duplicato — analisi in corso...', 'processing');
+      } else {
+        ddtStatus('✅ Hash OK — analisi in corso...', 'processing');
       }
     }
-    ddtFileHash = hash;
+    ddtFileHash = hash; // imposta solo se si procede
     var base64 = await ddtToBase64(file);
     var resp = await fetch('https://qshiwixlyrtzkdbzvkyh.supabase.co/functions/v1/anthropic-proxy', {
       method:'POST',
@@ -2117,7 +2121,7 @@ async function ddtImportaMagazzino(){
     alert('Import con errori:\n\n'+errors.join('\n')+'\n\nImportati: '+imported);
   } else {
     // Salva hash su Supabase
-    if(supa && typeof ddtFileHash !== 'undefined'){
+    if(supa && ddtFileHash){
       await supa.from('ddt_hashes').upsert({
         hash: ddtFileHash,
         filename: document.getElementById('ddt-filename').textContent,
