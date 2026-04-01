@@ -117,7 +117,7 @@ table.rt tbody tr:hover td{background:rgba(255,255,255,.02);}
 /* Confirm dialog */
 #cdlg{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.65);}
 #cdlg.open{display:flex;}
-#cdlgbox{background:var(--sur);border:1px solid var(--brd);border-radius:5px;padding:20px 22px;width:320px;max-width:92vw;}
+#cdlgbox{background:var(--sur);border:1px solid var(--brd);border-radius:5px;padding:20px 22px;width:480px;max-width:94vw;max-height:80vh;overflow-y:auto;}
 #cdlgmsg{font-family:'DM Mono',monospace;font-size:12px;line-height:1.6;color:var(--txt);margin-bottom:16px;white-space:pre-line;}
 #cdlgbtns{display:flex;gap:8px;justify-content:flex-end;}
 #cdlgok{padding:7px 16px;background:var(--red);color:#fff;font-family:'Syne',sans-serif;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border:none;border-radius:4px;cursor:pointer;}
@@ -1550,6 +1550,34 @@ function ask(msg, okLbl, onOk){
   canc.addEventListener('click',handleCanc);
 }
 
+function showConfirm(htmlMsg, title, okLbl, okColor){
+  return new Promise(function(resolve){
+    var msgEl = document.getElementById('cdlgmsg');
+    var okBtn = document.getElementById('cdlgok');
+    var cancBtn = document.getElementById('cdlgcanc');
+    // Supporto HTML nel messaggio
+    msgEl.style.whiteSpace = 'normal';
+    msgEl.innerHTML = (title ? '<div style="font-size:13px;font-weight:700;margin-bottom:10px;color:var(--txt)">'+title+'</div>' : '') + htmlMsg;
+    okBtn.textContent = okLbl || 'Conferma';
+    okBtn.style.background = okColor || 'var(--acc)';
+    okBtn.style.color = okColor ? '#0f0f0e' : '#0f0f0e';
+    document.getElementById('cdlg').classList.add('open');
+    function close(val){
+      document.getElementById('cdlg').classList.remove('open');
+      msgEl.style.whiteSpace = '';
+      okBtn.style.background = '';
+      okBtn.style.color = '';
+      okBtn.removeEventListener('click', handleOk);
+      cancBtn.removeEventListener('click', handleCanc);
+      resolve(val);
+    }
+    function handleOk(){ close(true); }
+    function handleCanc(){ close(false); }
+    okBtn.addEventListener('click', handleOk);
+    cancBtn.addEventListener('click', handleCanc);
+  });
+}
+
 document.addEventListener('keydown', function(e){
   if(e.key==='Escape'){ closeModal(); document.getElementById('cdlg').classList.remove('open'); }
 });
@@ -2091,23 +2119,55 @@ function ddtClear(){
 
 async function ddtImportaMagazzino(){
   if(!ddtArticoli.length){ alert('Nessun articolo da importare'); return; }
+
+  // Costruisci riassunto e mostra conferma prima di fare qualsiasi cosa
+  var tipoLabel = ddtTipo === 'out' ? 'USCITA' : 'ENTRATA';
+  var previewErrors = [];
+  var righe = ddtArticoli.map(function(r, i){
+    if(!r.codice) { previewErrors.push('Riga '+(i+1)+': codice mancante'); return null; }
+    if(!r.qty || r.qty <= 0) { previewErrors.push('Riga '+(i+1)+': quantità non valida'); return null; }
+    if(ddtTipo === 'out'){
+      var codice = S.codici.find(function(c){ return c.codice.toLowerCase()===r.codice.toLowerCase(); });
+      if(codice){
+        var giac = calcGiacenza(codice.id);
+        if(giac < r.qty) previewErrors.push('⚠ '+r.codice+': giacenza insufficiente (disp. '+giac+', richiesti '+r.qty+')');
+      }
+    }
+    return r;
+  }).filter(Boolean);
+
+  var sommario = '<div style="font-family:'DM Mono',monospace;font-size:11px;line-height:2;">';
+  sommario += '<div style="margin-bottom:10px;font-size:13px;font-weight:700;color:'+(ddtTipo==='out'?'var(--or)':'var(--grn)')+'">'+tipoLabel+' — '+righe.length+' articoli</div>';
+  righe.forEach(function(r){
+    sommario += '<div style="display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid var(--brd);padding:3px 0;">'
+      +'<span style="color:var(--or)">'+esc(r.codice)+'</span>'
+      +'<span style="color:var(--txt)">'+r.qty+' pz</span>'
+      +'<span style="color:var(--mut)">'+r.data+'</span>'
+      +'</div>';
+  });
+  if(previewErrors.length){
+    sommario += '<div style="margin-top:10px;color:var(--red)">'+previewErrors.join('<br>')+'</div>';
+  }
+  sommario += '</div>';
+
+  var ok = await showConfirm(sommario, 'Conferma importazione', 'Importa', previewErrors.length ? 'var(--yel)' : 'var(--grn)');
+  if(!ok) return;
+
+  // Esegui import
   var errors = [];
   var imported = 0;
   ddtArticoli.forEach(function(r, i){
     if(!r.codice){ errors.push('Riga '+(i+1)+': codice mancante'); return; }
     if(!r.qty || r.qty <= 0){ errors.push('Riga '+(i+1)+': quantità non valida'); return; }
-    // Trova o crea codice
     var codice = S.codici.find(function(c){ return c.codice.toLowerCase()===r.codice.toLowerCase(); });
     if(!codice){
       codice = {id:uid(), codice:r.codice, desc:'', um:'pz'};
       S.codici.push(codice);
     }
-    // Verifica giacenza per uscite
     if(ddtTipo === 'out'){
       var giac = calcGiacenza(codice.id);
       if(giac < r.qty){ errors.push('Riga '+(i+1)+': giacenza insufficiente per '+r.codice+' (disp. '+giac+')'); return; }
     }
-    // FIFO e ordini
     var fifoDetails = null;
     if(ddtTipo === 'out'){
       fifoDetails = allocaFIFO(calcLotti(codice.id), r.qty);
@@ -2123,17 +2183,14 @@ async function ddtImportaMagazzino(){
   if(errors.length){
     alert('Import con errori:\n\n'+errors.join('\n')+'\n\nImportati: '+imported);
   } else {
-    // Salva hash su Supabase
     if(supa && ddtFileHash){
-      var upsertRes = await supa.from('ddt_hashes').upsert({
+      await supa.from('ddt_hashes').upsert({
         hash: ddtFileHash,
         filename: document.getElementById('ddt-filename').textContent,
         imported_at: new Date().toISOString(),
         imported_by: myUserId
       }, { onConflict: 'hash' });
-    } else {
     }
-    alert('✅ '+imported+' movimenti importati con successo!');
     ddtClear();
     switchTab('movimenti');
   }
