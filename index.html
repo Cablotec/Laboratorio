@@ -2136,7 +2136,7 @@ async function ddtImportaMagazzino(){
     return r;
   }).filter(Boolean);
 
-  var sommario = '<div style="font-family:'DM Mono',monospace;font-size:11px;line-height:2;">';
+  var sommario = '<div style="font-family:monospace;font-size:11px;line-height:2;">';
   sommario += '<div style="margin-bottom:10px;font-size:13px;font-weight:700;color:'+(ddtTipo==='out'?'var(--or)':'var(--grn)')+'">'+tipoLabel+' — '+righe.length+' articoli</div>';
   righe.forEach(function(r){
     sommario += '<div style="display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid var(--brd);padding:3px 0;">'
