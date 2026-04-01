@@ -1976,14 +1976,10 @@ async function ddtAnalizza(file){
     // Calcola hash PRIMA di sprecare token sull'AI
     var hash = await ddtHashFile(file);
     ddtFileHash = null; // reset esplicito
-    console.log('[DDT] hash calcolato:', hash);
-    console.log('[DDT] supa disponibile:', !!supa);
+
     if(supa){
-      console.log('[DDT] myUserId:', myUserId);
       var checkRes = await supa.from('ddt_hashes').select('filename,imported_at,imported_by').eq('hash', hash).limit(1);
-      console.log('[DDT] checkRes:', JSON.stringify(checkRes));
       var existing = (checkRes.data && checkRes.data.length > 0) ? checkRes.data[0] : null;
-      console.log('[DDT] existing:', existing);
       if(existing){
         var when = new Date(existing.imported_at);
         var msg = 'Documento già importato!\n\nFile: '+existing.filename+'\nData: '+fmtD(when.toISOString())+' '+fmtT(when)+'\nUtente: '+(existing.imported_by||'sconosciuto')+'\n\nVuoi importarlo comunque?';
@@ -2017,7 +2013,6 @@ async function ddtAnalizza(file){
       })
     });
     var data = await resp.json();
-    console.log('Risposta proxy:', JSON.stringify(data));
     if(!data.content || !data.content[0]) throw new Error('Risposta non valida: '+(data.error ? data.error.message : JSON.stringify(data)));
     var text = data.content[0].text;
     var match = text.match(/\{[\s\S]*\}/);
@@ -2135,9 +2130,7 @@ async function ddtImportaMagazzino(){
         imported_at: new Date().toISOString(),
         imported_by: myUserId
       }, { onConflict: 'hash' });
-      console.log('[DDT] upsert hash result:', JSON.stringify(upsertRes));
     } else {
-      console.log('[DDT] upsert saltato — supa:', !!supa, 'ddtFileHash:', ddtFileHash);
     }
     alert('✅ '+imported+' movimenti importati con successo!');
     ddtClear();
