@@ -1799,7 +1799,8 @@ async function doLogout(){
 }
 
 async function tryRestore(){
-  if(!initSupabase()){
+  // NON ri-creare il client se esiste già (evita Multiple GoTrueClient)
+  if(!supa && !initSupabase()){
     // Fallback localStorage
     try{
       var o = JSON.parse(localStorage.getItem(LS)||'null');
