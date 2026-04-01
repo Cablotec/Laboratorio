@@ -1974,7 +1974,8 @@ async function ddtAnalizza(file){
     // Calcola hash e controlla duplicati
     var hash = await ddtHashFile(file);
     if(supa){
-      var check = await supa.from('ddt_hashes').select('filename,imported_at,imported_by').eq('hash', hash).maybeSingle();
+      var checkRes = await supa.from('ddt_hashes').select('filename,imported_at,imported_by').eq('hash', hash).limit(1);
+      var check = { data: (checkRes.data && checkRes.data.length > 0) ? checkRes.data[0] : null };
       if(check.data){
         var when = new Date(check.data.imported_at);
         var msg = 'Documento gia importato!\n\nFile: '+check.data.filename+'\nData: '+fmtD(when.toISOString())+' '+fmtT(when)+'\nUtente: '+(check.data.imported_by||'sconosciuto')+'\n\nVuoi importarlo comunque?';
@@ -2029,9 +2030,9 @@ async function ddtAnalizza(file){
     ddtStatus('✅ '+ddtArticoli.length+' articoli estratti', 'success');
   } catch(e){
     ddtStatus('❌ Errore: '+e.message, 'error');
+    ddtFileHash = null;
   }
   document.getElementById('ddt-dropzone').classList.remove('processing');
-  ddtFileHash = null;
 }
 
 function ddtRender(){
