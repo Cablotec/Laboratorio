@@ -1934,6 +1934,7 @@ var DDT_API_KEY = ''; // chiave gestita dal proxy Supabase
 var ddtTipo = 'in';
 var ddtArticoli = [];
 var ddtData = '';
+var ddtFileHash = null;
 
 (function(){
   var dz = document.getElementById('ddt-dropzone');
@@ -1985,7 +1986,7 @@ async function ddtAnalizza(file){
         }
       }
     }
-    var ddtFileHash = hash;
+    ddtFileHash = hash;
     var base64 = await ddtToBase64(file);
     var resp = await fetch('https://qshiwixlyrtzkdbzvkyh.supabase.co/functions/v1/anthropic-proxy', {
       method:'POST',
@@ -2030,6 +2031,7 @@ async function ddtAnalizza(file){
     ddtStatus('❌ Errore: '+e.message, 'error');
   }
   document.getElementById('ddt-dropzone').classList.remove('processing');
+  ddtFileHash = null;
 }
 
 function ddtRender(){
