@@ -1987,7 +1987,7 @@ async function ddtAnalizza(file){
           content:[
             { type: file.type==='application/pdf' ? 'document' : 'image',
               source:{ type:'base64', media_type:file.type, data:base64 } },
-            { type:'text', text:'Analizza questo DDT italiano. Estrai codice articolo e quantità. IMPORTANTE: le quantità usano la virgola come separatore decimale (10,000 = 10 pezzi, 42,000 = 42 pezzi). Restituisci sempre la parte intera prima della virgola come numero. Ignora seriali, descrizioni, prezzi. Rispondi SOLO con JSON: {"data":"YYYY-MM-DD","tipo":"entrata o uscita","articoli":[{"codice":"XXX","quantita":10}]}' }
+            { type:'text', text:'Analizza questo DDT italiano. Estrai codice articolo e quantità. Le quantità hanno la virgola come separatore decimale italiano (10,000 significa 10 pezzi). Restituisci la quantità ESATTAMENTE come appare nel documento, come stringa. Ignora seriali, descrizioni, prezzi. Rispondi SOLO con JSON: {"data":"YYYY-MM-DD","tipo":"entrata o uscita","articoli":[{"codice":"XXX","quantita":"10,000"}]}' }
           ]
         }]
       })
@@ -2005,14 +2005,12 @@ async function ddtAnalizza(file){
       // Parsing robusto quantità: gestisce sia "10,000" (it) che "10.000" (it) che 10000
       var qtyRaw = a.quantita;
       var qty = 1;
-      if(typeof qtyRaw === 'number'){
-        // Se è già un numero ma sembra sbagliato (es. 10000 invece di 10)
-        qty = qtyRaw;
-      } else if(typeof qtyRaw === 'string'){
-        // Rimuovi punti separatori migliaia, sostituisci virgola con punto
-        qty = parseFloat(qtyRaw.replace(/\./g,'').replace(',','.')) || 1;
+      if(typeof qtyRaw === 'string'){
+        // Stringa con virgola decimale italiana: prendi solo la parte intera
+        qty = parseInt(qtyRaw.split(',')[0].trim()) || 1;
+      } else if(typeof qtyRaw === 'number'){
+        qty = Math.round(qtyRaw);
       }
-      qty = Math.round(qty); // arrotonda al numero intero
       return { data: ddtData, codice: a.codice||'', qty: qty };
     });
     ddtRender();
