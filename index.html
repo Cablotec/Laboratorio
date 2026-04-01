@@ -592,7 +592,13 @@ function saveCodice(id){
   var cod = (document.getElementById('c-cod').value||'').trim();
   var desc = (document.getElementById('c-desc').value||'').trim();
   if(!cod){ alert('Inserisci il codice articolo'); return; }
-  
+
+  // Controlla duplicati (esclude se stessa in modifica)
+  var duplicato = S.codici.find(function(x){
+    return x.codice.toLowerCase() === cod.toLowerCase() && x.id !== id;
+  });
+  if(duplicato){ alert('Codice "'+cod+'" già esistente'); return; }
+
   if(id){
     var c = S.codici.find(function(x){ return x.id===id; });
     if(c){ c.codice=cod; c.desc=desc; c.um='pz'; }
@@ -1953,10 +1959,33 @@ function ddtHandleFile(file){
   ddtAnalizza(file);
 }
 
+async function ddtHashFile(file){
+  var buffer = await file.arrayBuffer();
+  var hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  var hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+}
+
 async function ddtAnalizza(file){
-  ddtStatus('🔄 Analisi in corso...', 'processing');
+  ddtStatus('🔄 Verifica documento...', 'processing');
   document.getElementById('ddt-dropzone').classList.add('processing');
   try{
+    // Calcola hash e controlla duplicati
+    var hash = await ddtHashFile(file);
+    if(supa){
+      var check = await supa.from('ddt_hashes').select('filename,imported_at,imported_by').eq('hash', hash).single();
+      if(check.data){
+        var when = new Date(check.data.imported_at);
+        var msg = 'Documento gia importato!\n\nFile: '+check.data.filename+'\nData: '+fmtD(when.toISOString())+' '+fmtT(when)+'\nUtente: '+(check.data.imported_by||'sconosciuto')+'\n\nVuoi importarlo comunque?';
+        var confirm = window.confirm(msg);
+        if(!confirm){
+          ddtStatus('', '');
+          document.getElementById('ddt-dropzone').classList.remove('processing');
+          return;
+        }
+      }
+    }
+    var ddtFileHash = hash;
     var base64 = await ddtToBase64(file);
     var resp = await fetch('https://qshiwixlyrtzkdbzvkyh.supabase.co/functions/v1/anthropic-proxy', {
       method:'POST',
@@ -2050,7 +2079,7 @@ function ddtClear(){
   document.getElementById('ddt-dropzone').classList.remove('processing');
 }
 
-function ddtImportaMagazzino(){
+async function ddtImportaMagazzino(){
   if(!ddtArticoli.length){ alert('Nessun articolo da importare'); return; }
   var errors = [];
   var imported = 0;
@@ -2084,6 +2113,15 @@ function ddtImportaMagazzino(){
   if(errors.length){
     alert('Import con errori:\n\n'+errors.join('\n')+'\n\nImportati: '+imported);
   } else {
+    // Salva hash su Supabase
+    if(supa && typeof ddtFileHash !== 'undefined'){
+      await supa.from('ddt_hashes').upsert({
+        hash: ddtFileHash,
+        filename: document.getElementById('ddt-filename').textContent,
+        imported_at: new Date().toISOString(),
+        imported_by: myUserId
+      });
+    }
     alert('✅ '+imported+' movimenti importati con successo!');
     ddtClear();
     switchTab('movimenti');
