@@ -1335,20 +1335,20 @@ function renderOrdini(){
 
     var giacenzaLive = calcGiacenza(o.codId);
 
-    // Somma qtyOrd degli ordini aperti più vecchi (stesso codice) — impegno FIFO
+    // Somma qtyRes degli ordini aperti più vecchi (stesso codice) — impegno FIFO
     var impegnataPrecedente = 0;
     S.ordini.forEach(function(altro){
       if(altro.codId !== o.codId) return;
       if(altro.qtyRes === 0) return; // completato, non conta
       if(altro.data < o.data) {
-        impegnataPrecedente += altro.qtyOrd;
+        impegnataPrecedente += altro.qtyRes;
       } else if(altro.data === o.data && altro.id < o.id) {
-        impegnataPrecedente += altro.qtyOrd;
+        impegnataPrecedente += altro.qtyRes;
       }
     });
 
     var disponibilita = Math.max(0, giacenzaLive - impegnataPrecedente);
-    item.mancanti = disponibilita >= o.qtyOrd ? 0 : o.qtyOrd - disponibilita;
+    item.mancanti = disponibilita >= o.qtyRes ? 0 : o.qtyRes - disponibilita;
   });
 
   // Ordinamento
@@ -1788,7 +1788,6 @@ function applyRoleUI(){
 }
 
 async function doLogout(){
-  if(supa && !isReadOnly) await releaseLock();
   await supa.auth.signOut();
   location.reload();
 }
@@ -1809,17 +1808,6 @@ async function tryRestore(){
   if(!myUserId) myUserId = 'u_'+Math.random().toString(36).substring(2,10);
 
   try {
-    // Acquisisci lock
-    var ok = await acquireLock();
-    if(!ok){
-      setReadOnly(true, '🔒 App aperta da un altro utente — sola lettura');
-      startReadonlyPoller();
-    } else {
-      setReadOnly(false);
-      startHeartbeat();
-      document.getElementById('savlbl').textContent='Connesso';
-    }
-
     // Avvia realtime
     startRealtime();
 
@@ -1829,7 +1817,7 @@ async function tryRestore(){
       loadObj(res.data.data);
       var sv = new Date(res.data.updated_at);
       document.getElementById('savdot').className='savdot saved';
-      document.getElementById('savlbl').textContent=(isReadOnly?'🔒 Sola lettura — ':'Connesso — ')+fmtD(sv.toISOString())+' '+fmtT(sv);
+      document.getElementById('savlbl').textContent='Connesso — '+fmtD(sv.toISOString())+' '+fmtT(sv);
       renderCodici(); renderMovimenti(); renderOrdini();
     }
   } catch(e){
@@ -1841,13 +1829,7 @@ async function tryRestore(){
   }
 }
 
-// Rilascia lock alla chiusura
-window.addEventListener('beforeunload', function(){
-  if(supa && !isReadOnly){
-    navigator.sendBeacon(SUPA_URL+'/rest/v1/magazzino?id=eq.main',
-      JSON.stringify({locked_by: null, lock_ts: 0}));
-  }
-});
+
 function serialize(){
   return {v:2, savedAt:new Date().toISOString(), nextId:nextId, codici:S.codici, movimenti:S.movimenti, ordini:S.ordini};
 }
