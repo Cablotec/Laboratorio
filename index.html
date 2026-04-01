@@ -2128,12 +2128,15 @@ async function ddtImportaMagazzino(){
   } else {
     // Salva hash su Supabase
     if(supa && ddtFileHash){
-      await supa.from('ddt_hashes').upsert({
+      var upsertRes = await supa.from('ddt_hashes').upsert({
         hash: ddtFileHash,
         filename: document.getElementById('ddt-filename').textContent,
         imported_at: new Date().toISOString(),
         imported_by: myUserId
-      });
+      }, { onConflict: 'hash' });
+      console.log('[DDT] upsert hash result:', JSON.stringify(upsertRes));
+    } else {
+      console.log('[DDT] upsert saltato — supa:', !!supa, 'ddtFileHash:', ddtFileHash);
     }
     alert('✅ '+imported+' movimenti importati con successo!');
     ddtClear();
