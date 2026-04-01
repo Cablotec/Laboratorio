@@ -1974,7 +1974,7 @@ async function ddtAnalizza(file){
     // Calcola hash e controlla duplicati
     var hash = await ddtHashFile(file);
     if(supa){
-      var check = await supa.from('ddt_hashes').select('filename,imported_at,imported_by').eq('hash', hash).single();
+      var check = await supa.from('ddt_hashes').select('filename,imported_at,imported_by').eq('hash', hash).maybeSingle();
       if(check.data){
         var when = new Date(check.data.imported_at);
         var msg = 'Documento gia importato!\n\nFile: '+check.data.filename+'\nData: '+fmtD(when.toISOString())+' '+fmtT(when)+'\nUtente: '+(check.data.imported_by||'sconosciuto')+'\n\nVuoi importarlo comunque?';
