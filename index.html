@@ -240,6 +240,7 @@ tr.rip-rientrata td{opacity:.55;}
   <button class="navtab" onclick="switchTab('movimenti')">Movimenti</button>
   <button class="navtab" onclick="switchTab('ordini')">Ordini</button>
   <button class="navtab" onclick="switchTab('ddt')">Estrattore DDT</button>
+  <button class="navtab" onclick="switchTab('matricole')">Matricole</button>
 </nav>
 
 <!-- ═══════════════════════════════════════════════════════════ -->
@@ -391,6 +392,57 @@ tr.rip-rientrata td{opacity:.55;}
   </div>
 </section>
 
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- SEZIONE MATRICOLE -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section id="sec-matricole" class="sec">
+  <div class="toolbar">
+    <h2>Controllo Matricole</h2>
+    <button class="btng" onclick="matExportXLSX()">⬇ Esporta Excel</button>
+    <button class="btnp" onclick="matVerifica()">🔍 Verifica</button>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:18px;">
+
+    <!-- ENTRATE BELLINI -->
+    <div style="background:var(--sur);border:1px solid var(--brd);border-radius:6px;padding:14px;">
+      <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--grn);margin-bottom:10px;">⬇ Entrate Bellini</div>
+      <label style="display:block;padding:10px;background:var(--sur2);border:1px dashed var(--brd);border-radius:4px;text-align:center;cursor:pointer;font-family:'DM Mono',monospace;font-size:11px;color:var(--mut);margin-bottom:10px;">
+        + Carica PDF Bellini
+        <input type="file" id="mat-in-file" accept=".pdf" multiple style="display:none;" onchange="matHandleFile(this.files,'in')">
+      </label>
+      <div class="tw"><table class="rt" id="mat-in-table">
+        <thead><tr><th>Matricola</th><th>File</th><th>Data carico</th><th style="width:30px;"></th></tr></thead>
+        <tbody id="mat-in-tbody"><tr><td colspan="4" class="empty">Nessuna matricola</td></tr></tbody>
+      </table></div>
+    </div>
+
+    <!-- USCITE CABLOTEC -->
+    <div style="background:var(--sur);border:1px solid var(--brd);border-radius:6px;padding:14px;">
+      <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--or);margin-bottom:10px;">⬆ Uscite Cablotec</div>
+      <label style="display:block;padding:10px;background:var(--sur2);border:1px dashed var(--brd);border-radius:4px;text-align:center;cursor:pointer;font-family:'DM Mono',monospace;font-size:11px;color:var(--mut);margin-bottom:10px;">
+        + Carica PDF Cablotec
+        <input type="file" id="mat-out-file" accept=".pdf" multiple style="display:none;" onchange="matHandleFile(this.files,'out')">
+      </label>
+      <div class="tw"><table class="rt" id="mat-out-table">
+        <thead><tr><th>Matricola</th><th>File</th><th>Data carico</th><th style="width:30px;"></th></tr></thead>
+        <tbody id="mat-out-tbody"><tr><td colspan="4" class="empty">Nessuna matricola</td></tr></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- RISULTATO VERIFICA -->
+  <div id="mat-verifica-wrap" style="display:none;">
+    <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--acc);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--brd);">Risultato Verifica</div>
+    <div class="kpis" id="mat-kpis"></div>
+    <div class="tw"><table class="rt">
+      <thead><tr><th>Matricola</th><th>Stato</th><th>File Entrata</th><th>File Uscita</th></tr></thead>
+      <tbody id="mat-verifica-tbody"></tbody>
+    </table></div>
+  </div>
+</section>
+
 <!-- ═══════════════════════════════════════════════════════════ -->
 <!-- MODAL UNIVERSALE -->
 <!-- ═══════════════════════════════════════════════════════════ -->
@@ -431,12 +483,15 @@ tr.rip-rientrata td{opacity:.55;}
   <button class="btng" onclick="askReset()">Reset Dati</button>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════
 // STATE & UTILS
 // ═══════════════════════════════════════════════════════════
 var LS = 'cablotec_magazzino_v2';
-var S = {codici:[], movimenti:[], ordini:[]};
+var S = {codici:[], movimenti:[], ordini:[], matricoleIn:[], matricoleOut:[]};
+if(typeof pdfjsLib !== 'undefined') pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 var nextId = 1;
 var currentTab = 'codici';
 var movFilter = 'all';
@@ -1868,13 +1923,15 @@ async function tryRestore(){
 
 
 function serialize(){
-  return {v:2, savedAt:new Date().toISOString(), nextId:nextId, codici:S.codici, movimenti:S.movimenti, ordini:S.ordini};
+  return {v:2, savedAt:new Date().toISOString(), nextId:nextId, codici:S.codici, movimenti:S.movimenti, ordini:S.ordini, matricoleIn:S.matricoleIn, matricoleOut:S.matricoleOut};
 }
 function loadObj(o){
   if(!o || (o.v!==1 && o.v!==2)) throw new Error('Formato non compatibile');
   S.codici = o.codici||[];
   S.movimenti = o.movimenti||[];
   S.ordini = o.ordini||[];
+  S.matricoleIn = o.matricoleIn||[];
+  S.matricoleOut = o.matricoleOut||[];
   nextId = o.nextId||1;
   
   // Migrazione da v1 a v2
@@ -2209,6 +2266,143 @@ function ddtToBase64(file){
     r.onerror = reject;
     r.readAsDataURL(file);
   });
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// MATRICOLE
+// ═══════════════════════════════════════════════════════════
+// Struttura: { matricola: '1234567890', file: 'DDT-001.pdf', data: '2026-04-01' }
+// Persistenza in S.matricoleIn e S.matricoleOut (già serializzati/deserializzati con il resto)
+
+function matHandleFile(files, dir){
+  if(!files || !files.length) return;
+  Array.from(files).forEach(function(file){
+    matEstraiDaPDF(file, dir);
+  });
+}
+
+async function matEstraiDaPDF(file, dir){
+  try {
+    var arrayBuffer = await file.arrayBuffer();
+    var pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+    var fullText = '';
+    for(var i = 1; i <= pdf.numPages; i++){
+      var page = await pdf.getPage(i);
+      var content = await page.getTextContent();
+      fullText += content.items.map(function(item){ return item.str; }).join(' ') + ' ';
+    }
+    // Estrai matricole: sequenze di esattamente 10 cifre
+    var trovate = [];
+    var matches = fullText.match(/\b\d{10}\b/g) || [];
+    // Deduplicazione per file
+    var unique = matches.filter(function(m, i, a){ return a.indexOf(m) === i; });
+    var oggi = new Date().toISOString().substring(0,10);
+    unique.forEach(function(m){
+      var esistente = (dir === 'in' ? S.matricoleIn : S.matricoleOut).find(function(r){ return r.matricola === m && r.file === file.name; });
+      if(!esistente){
+        (dir === 'in' ? S.matricoleIn : S.matricoleOut).push({ matricola: m, file: file.name, data: oggi });
+      }
+    });
+    matRender();
+    markUnsaved();
+    if(unique.length === 0){
+      alert('Nessuna matricola (10 cifre) trovata in: ' + file.name);
+    }
+  } catch(e) {
+    alert('Errore lettura PDF: ' + e.message);
+  }
+}
+
+function matRender(){
+  ['in','out'].forEach(function(dir){
+    var lista = dir === 'in' ? S.matricoleIn : S.matricoleOut;
+    var tbody = document.getElementById('mat-'+dir+'-tbody');
+    if(!tbody) return;
+    if(!lista.length){
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">Nessuna matricola</td></tr>';
+      return;
+    }
+    tbody.innerHTML = lista.map(function(r, i){
+      return '<tr>'
+        +'<td><span class="cell mono" style="color:var(--acc)">'+esc(r.matricola)+'</span></td>'
+        +'<td><span class="cell mono" style="font-size:10px;color:var(--mut)">'+esc(r.file)+'</span></td>'
+        +'<td><span class="cell mono">'+esc(r.data)+'</span></td>'
+        +'<td><span class="cell"><button class="btnd" onclick="matRemove(\''+dir+'\','+i+')">🗑</button></span></td>'
+        +'</tr>';
+    }).join('');
+  });
+}
+
+function matRemove(dir, i){
+  if(dir === 'in') S.matricoleIn.splice(i,1);
+  else S.matricoleOut.splice(i,1);
+  matRender();
+  markUnsaved();
+}
+
+function matVerifica(){
+  var wrap = document.getElementById('mat-verifica-wrap');
+  var tbody = document.getElementById('mat-verifica-tbody');
+  var kpis = document.getElementById('mat-kpis');
+  if(!S.matricoleIn.length && !S.matricoleOut.length){
+    alert('Carica almeno un PDF per la verifica.');
+    return;
+  }
+
+  var inSet = {};
+  S.matricoleIn.forEach(function(r){ inSet[r.matricola] = r.file; });
+  var outSet = {};
+  S.matricoleOut.forEach(function(r){ outSet[r.matricola] = r.file; });
+
+  var tutte = Object.keys(Object.assign({}, inSet, outSet));
+  var nOk = 0, nAttesa = 0, nAnomalia = 0;
+  var rows = tutte.sort().map(function(m){
+    var inFile = inSet[m] || null;
+    var outFile = outSet[m] || null;
+    var stato, badgeClass, badgeLabel;
+    if(inFile && outFile){
+      stato = 'ok'; badgeClass = 'bok'; badgeLabel = '✅ Uscita OK'; nOk++;
+    } else if(inFile && !outFile){
+      stato = 'attesa'; badgeClass = 'byel'; badgeLabel = '⏳ In attesa'; nAttesa++;
+    } else {
+      stato = 'anomalia'; badgeClass = 'berr'; badgeLabel = '❌ Anomalia'; nAnomalia++;
+    }
+    return '<tr>'
+      +'<td><span class="cell mono" style="color:var(--acc)">'+esc(m)+'</span></td>'
+      +'<td><span class="cell"><span class="badge '+badgeClass+'">'+badgeLabel+'</span></span></td>'
+      +'<td><span class="cell mono" style="font-size:10px;color:var(--mut)">'+(inFile ? esc(inFile) : '—')+'</span></td>'
+      +'<td><span class="cell mono" style="font-size:10px;color:var(--mut)">'+(outFile ? esc(outFile) : '—')+'</span></td>'
+      +'</tr>';
+  });
+
+  tbody.innerHTML = rows.join('');
+  kpis.innerHTML = ''
+    +'<div class="kpi"><div class="kl">Totale</div><div class="kv ka">'+tutte.length+'</div></div>'
+    +'<div class="kpi"><div class="kl">Uscite OK</div><div class="kv kg">'+nOk+'</div></div>'
+    +'<div class="kpi"><div class="kl">In attesa</div><div class="kv ky">'+nAttesa+'</div></div>'
+    +'<div class="kpi"><div class="kl">Anomalie</div><div class="kv kr">'+nAnomalia+'</div></div>';
+  wrap.style.display = 'block';
+}
+
+function matExportXLSX(){
+  var inSet = {};
+  S.matricoleIn.forEach(function(r){ inSet[r.matricola] = r.file; });
+  var outSet = {};
+  S.matricoleOut.forEach(function(r){ outSet[r.matricola] = r.file; });
+  var tutte = Object.keys(Object.assign({}, inSet, outSet)).sort();
+
+  var ws_data = [['Matricola','Stato','File Entrata (Bellini)','File Uscita (Cablotec)']];
+  tutte.forEach(function(m){
+    var inFile = inSet[m] || '';
+    var outFile = outSet[m] || '';
+    var stato = inFile && outFile ? 'Uscita OK' : inFile ? 'In attesa' : 'Anomalia';
+    ws_data.push([m, stato, inFile, outFile]);
+  });
+  var wb = XLSX.utils.book_new();
+  var ws = XLSX.utils.aoa_to_sheet(ws_data);
+  XLSX.utils.book_append_sheet(wb, ws, 'Matricole');
+  XLSX.writeFile(wb, 'matricole_'+new Date().toISOString().substring(0,10)+'.xlsx');
 }
 
 // ═══════════════════════════════════════════════════════════
