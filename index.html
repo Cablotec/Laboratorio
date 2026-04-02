@@ -401,35 +401,15 @@ tr.rip-rientrata td{opacity:.55;}
     <h2>Matricole Bellini</h2>
     <button class="btng" onclick="matAddManuale()">+ Aggiungi</button>
     <button class="btng" onclick="matExportXLSX()">⬇ Esporta Excel</button>
-    <button class="btng" id="mat-btn-carica-cab" onclick="matCaricaCablotec()">⬆ Carica Uscita Cablotec<input type="file" id="mat-cab-file" accept=".pdf" multiple style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="matHandleFile(this.files,'out')"></button>
-    <label class="btng" style="position:relative;cursor:pointer;">⬇ Carica DDT Bellini<input type="file" id="mat-in-file" accept=".pdf" multiple style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="matHandleFile(this.files,'in')"></label>
     <button class="btnp" id="mat-btn-chiudi" onclick="matChiudiPeriodo()" disabled style="opacity:.4;cursor:not-allowed;">🔒 Chiudi Periodo</button>
   </div>
-
-  <!-- KPI bar -->
   <div class="kpis" id="mat-kpis" style="margin-bottom:14px;"></div>
-
-  <!-- Avanzi da periodo precedente -->
-  <div id="mat-avanzi-wrap" style="display:none;margin-bottom:14px;">
-    <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--yel);margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid var(--brd);">⏳ Avanzi periodo precedente</div>
-    <div class="tw"><table class="rt">
-      <thead><tr><th>Matricola</th><th>DDT Bellini</th><th>Data</th><th style="width:30px;"></th></tr></thead>
-      <tbody id="mat-avanzi-tbody"></tbody>
-    </table></div>
-  </div>
-
-  <!-- Tabella principale -->
-  <div class="tw">
-    <table class="rt" id="mat-main-table">
-      <thead><tr>
-        <th>Matricola</th>
-        <th>DDT Bellini</th>
-        <th>Data entrata</th>
-        <th>Stato</th>
-        <th>DDT Cablotec</th>
-        <th style="width:30px;"></th>
-      </tr></thead>
-      <tbody id="mat-tbody"><tr><td colspan="6" class="empty">Nessuna matricola — carica un DDT Bellini</td></tr></tbody>
+  <!-- Tabella colonnare tipo Excel -->
+  <div class="tw" id="mat-table-wrap">
+    <div class="empty" id="mat-empty">Nessuna matricola — i DDT Bellini vengono aggiunti automaticamente dall'Estrattore DDT</div>
+    <table class="rt" id="mat-main-table" style="display:none;">
+      <thead id="mat-thead"></thead>
+      <tbody id="mat-tbody"></tbody>
     </table>
   </div>
 </section>
@@ -2294,52 +2274,13 @@ function ddtToBase64(file){
 // ═══════════════════════════════════════════════════════════
 // MATRICOLE
 // ═══════════════════════════════════════════════════════════
+// Struttura S.matricole: array di { id, matricola, ddt, dataEntrata, stato, ddtCablotec, dataUscita }
+// S.matricoleAvanzi: stessa struttura, da periodo precedente
+// Vista: colonne = DDT Bellini, righe = matricole (come Excel)
 
 function uid2(){ return 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 
-function matHandleFile(files, dir){
-  if(!files || !files.length) return;
-  Array.from(files).forEach(function(file){ matEstraiDaPDF(file, dir); });
-}
-
-async function matEstraiDaPDF(file, dir){
-  try {
-    var buf = await file.arrayBuffer();
-    var pdfDoc = await pdfjsLib.getDocument({data: buf}).promise;
-    var txt = '';
-    for(var i=1; i<=pdfDoc.numPages; i++){
-      var pg = await pdfDoc.getPage(i);
-      var ct = await pg.getTextContent();
-      txt += ct.items.map(function(x){ return x.str; }).join(' ')+' ';
-    }
-    var unique = (txt.match(/\b\d{10}\b/g)||[]).filter(function(m,i,a){ return a.indexOf(m)===i; });
-    var oggi = new Date().toISOString().substring(0,10);
-    if(dir === 'in'){
-      var nuove = 0;
-      unique.forEach(function(m){
-        var dup = S.matricole.filter(function(r){ return r.matricola===m && r.ddtBellini===file.name; });
-        if(!dup.length){
-          // segnala duplicato tra DDT diversi
-          var altriDdt = S.matricole.filter(function(r){ return r.matricola===m && r.ddtBellini!==file.name && r.stato===MAT_STATI.ATTESA; });
-          altriDdt.forEach(function(r){ r.stato='duplicato'; });
-          S.matricole.push({id:uid2(),matricola:m,ddtBellini:file.name,dataEntrata:oggi,stato:altriDdt.length?'duplicato':MAT_STATI.ATTESA,ddtCablotec:null,dataUscita:null});
-          nuove++;
-        }
-      });
-      if(nuove===0) alert('Nessuna matricola nuova trovata in: '+file.name);
-    } else {
-      var nAnom=0;
-      unique.forEach(function(m){
-        var trovata = matSegnaUscita(m, file.name, oggi);
-        if(!trovata) nAnom++;
-      });
-      if(nAnom>0) alert('\u26a0\ufe0f '+nAnom+' matricole in uscita non trovate in nessun DDT Bellini (segnate come anomalia).');
-    }
-    matRender();
-    markUnsaved();
-  } catch(e){ alert('Errore lettura PDF: '+e.message); }
-}
-
+// Chiamata dall'estrattore DDT in automatico
 function matSegnaUscita(matricola, ddtCablotec, data){
   var r = S.matricole.find(function(x){ return x.matricola===matricola && (x.stato===MAT_STATI.ATTESA||x.stato==='duplicato'); });
   if(r){
@@ -2348,152 +2289,204 @@ function matSegnaUscita(matricola, ddtCablotec, data){
     r.dataUscita = data;
     return true;
   }
-  var esisteGia = S.matricole.find(function(x){ return x.matricola===matricola && x.ddtCablotec===ddtCablotec; });
-  if(!esisteGia){
-    S.matricole.push({id:uid2(),matricola:matricola,ddtBellini:null,dataEntrata:null,stato:MAT_STATI.ANOMALIA,ddtCablotec:ddtCablotec,dataUscita:data});
+  // anomalia: uscita senza entrata Bellini
+  if(!S.matricole.find(function(x){ return x.matricola===matricola && x.ddtCablotec===ddtCablotec; })){
+    S.matricole.push({id:uid2(),matricola:matricola,ddt:'—',dataEntrata:null,stato:MAT_STATI.ANOMALIA,ddtCablotec:ddtCablotec,dataUscita:data});
   }
   return false;
 }
 
 function matRender(){
-  var tbody = document.getElementById('mat-tbody');
+  var empty  = document.getElementById('mat-empty');
+  var table  = document.getElementById('mat-main-table');
+  var thead  = document.getElementById('mat-thead');
+  var tbody  = document.getElementById('mat-tbody');
+  var kpiEl  = document.getElementById('mat-kpis');
   if(!tbody) return;
 
-  var nAttesa=0, nOk=0, nAnom=0, nDup=0;
+  // Raccogli colonne: Avanzi + DDT distinti nell'ordine di inserimento
+  var cols = [];
+  if(S.matricoleAvanzi.length) cols.push('__avanzi__');
+  S.matricole.forEach(function(r){
+    if(r.ddt && cols.indexOf(r.ddt)===-1) cols.push(r.ddt);
+  });
+
+  // KPI
+  var nAttesa=0,nOk=0,nAnom=0,nDup=0;
   S.matricole.forEach(function(r){
     if(r.stato===MAT_STATI.ATTESA) nAttesa++;
     else if(r.stato===MAT_STATI.OK) nOk++;
     else if(r.stato===MAT_STATI.ANOMALIA) nAnom++;
     else if(r.stato==='duplicato') nDup++;
   });
-
-  var kpis = document.getElementById('mat-kpis');
-  if(kpis) kpis.innerHTML = ''
-    +'<div class="kpi"><div class="kl">Totale</div><div class="kv ka">'+(S.matricole.length+S.matricoleAvanzi.length)+'</div></div>'
+  if(kpiEl) kpiEl.innerHTML=
+    '<div class="kpi"><div class="kl">Totale</div><div class="kv ka">'+(S.matricole.length+S.matricoleAvanzi.length)+'</div></div>'
     +'<div class="kpi"><div class="kl">In attesa</div><div class="kv ky">'+nAttesa+'</div></div>'
     +'<div class="kpi"><div class="kl">Uscite OK</div><div class="kv kg">'+nOk+'</div></div>'
     +'<div class="kpi"><div class="kl">Anomalie</div><div class="kv kr">'+nAnom+'</div></div>'
     +(nDup?'<div class="kpi"><div class="kl">Duplicati</div><div class="kv" style="color:var(--or)">'+nDup+'</div></div>':'');
 
-  var avanziWrap = document.getElementById('mat-avanzi-wrap');
-  var avanziTbody = document.getElementById('mat-avanzi-tbody');
-  if(avanziWrap && avanziTbody){
-    if(S.matricoleAvanzi.length){
-      avanziWrap.style.display='block';
-      avanziTbody.innerHTML = S.matricoleAvanzi.map(function(r,i){
-        return '<tr style="opacity:.6;">'
-          +'<td><span class="cell mono" style="color:var(--yel)">'+esc(r.matricola)+'</span></td>'
-          +'<td><span class="cell mono" style="font-size:10px;color:var(--mut)">'+esc(r.ddtBellini||'\u2014')+'</span></td>'
-          +'<td><span class="cell mono">'+esc(r.dataEntrata||'\u2014')+'</span></td>'
-          +'<td><span class="cell"><button class="btnd" onclick="matRimuoviAvanzo('+i+')">\u1f5d1</button></span></td>'
-          +'</tr>';
-      }).join('');
-    } else {
-      avanziWrap.style.display='none';
-    }
+  if(!cols.length){
+    if(empty) empty.style.display='block';
+    if(table) table.style.display='none';
+    var btnC=document.getElementById('mat-btn-chiudi');
+    if(btnC){btnC.disabled=true;btnC.style.opacity='.4';btnC.style.cursor='not-allowed';}
+    return;
   }
+  if(empty) empty.style.display='none';
+  if(table) table.style.display='';
 
-  var sorted = S.matricole.slice().sort(function(a,b){
-    var ord={anomalia:0,duplicato:1,attesa:2,ok:3};
-    return (ord[a.stato]||9)-(ord[b.stato]||9);
+  // Intestazioni colonne
+  var thHTML = '<tr><th style="width:32px;"></th>';
+  cols.forEach(function(col){
+    var label = col==='__avanzi__' ? '⏳ Avanzi' : col;
+    var color = col==='__avanzi__' ? 'var(--yel)' : 'var(--grn)';
+    thHTML += '<th style="color:'+color+';min-width:130px;">'
+      +label
+      +(col!=='__avanzi__' ? ' <button class="btnd" style="font-size:9px;padding:1px 5px;margin-left:4px;" onclick="matAddInColonna(\''+col.replace(/'/g,"\\'")+'\')" title="Aggiungi matricola">+</button>' : '')
+      +'</th>';
   });
+  thHTML += '</tr>';
+  thead.innerHTML = thHTML;
 
-  if(!sorted.length && !S.matricoleAvanzi.length){
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Nessuna matricola \u2014 carica un DDT Bellini</td></tr>';
-  } else {
-    tbody.innerHTML = sorted.map(function(r){
-      var bc,bl,rs='';
-      if(r.stato===MAT_STATI.OK){ bc='bok'; bl='\u2705 Uscita OK'; rs='opacity:.55;'; }
-      else if(r.stato===MAT_STATI.ATTESA){ bc='byel'; bl='\u23f3 In attesa'; }
-      else if(r.stato===MAT_STATI.ANOMALIA){ bc='berr'; bl='\u274c Anomalia'; rs='background:rgba(255,78,107,.04);'; }
-      else { bc='bor'; bl='\u26a0\ufe0f Duplicato'; rs='background:rgba(255,107,53,.04);'; }
-      return '<tr style="'+rs+'">'
-        +'<td><span class="cell mono" style="color:var(--acc)">'+esc(r.matricola)+'</span></td>'
-        +'<td><span class="cell mono" style="font-size:10px;color:var(--mut)">'+esc(r.ddtBellini||'\u2014')+'</span></td>'
-        +'<td><span class="cell mono">'+esc(r.dataEntrata||'\u2014')+'</span></td>'
-        +'<td><span class="cell"><span class="badge '+bc+'">'+bl+'</span></span></td>'
-        +'<td><span class="cell mono" style="font-size:10px;color:var(--mut)">'+esc(r.ddtCablotec||'\u2014')+'</span></td>'
-        +'<td><span class="cell"><button class="btnd" onclick="matRimuovi(&quot;'+r.id+'&quot;)">&#x1f5d1;</button></span></td>'
-        +'</tr>';
-    }).join('');
+  // Righe: max altezza tra le colonne
+  var colData = {};
+  cols.forEach(function(col){
+    if(col==='__avanzi__') colData[col] = S.matricoleAvanzi.slice();
+    else colData[col] = S.matricole.filter(function(r){ return r.ddt===col; });
+  });
+  var maxRows = cols.reduce(function(m,c){ return Math.max(m,colData[c].length); },0);
+
+  var rowsHTML = '';
+  for(var ri=0; ri<maxRows; ri++){
+    rowsHTML += '<tr>';
+    // numero riga
+    rowsHTML += '<td><span class="cell mono" style="color:var(--mut);font-size:10px;">'+(ri+1)+'</span></td>';
+    cols.forEach(function(col){
+      var r = colData[col][ri];
+      if(!r){ rowsHTML += '<td></td>'; return; }
+      var isAvanzo = col==='__avanzi__';
+      var style='', badge='';
+      if(isAvanzo){
+        style='color:var(--yel);';
+      } else if(r.stato===MAT_STATI.OK){
+        style='text-decoration:line-through;opacity:.45;color:var(--mut);';
+        badge='<span class="badge bok" style="font-size:9px;margin-left:4px;vertical-align:middle;">'+esc(r.ddtCablotec||'OK')+'</span>';
+      } else if(r.stato===MAT_STATI.ANOMALIA){
+        style='color:var(--red);';
+        badge='<span class="badge berr" style="font-size:9px;margin-left:4px;">❌</span>';
+      } else if(r.stato==='duplicato'){
+        style='color:var(--or);';
+        badge='<span class="badge bor" style="font-size:9px;margin-left:4px;">⚠️</span>';
+      } else {
+        style='color:var(--acc);';
+      }
+      var delBtn = isAvanzo
+        ? '<button class="btnd" style="margin-left:4px;padding:1px 4px;" onclick="matRimuoviAvanzoById(\''+r.id+'\')">✕</button>'
+        : '<button class="btnd" style="margin-left:4px;padding:1px 4px;" onclick="matRimuovi(\''+r.id+'\')">✕</button>';
+      rowsHTML += '<td><span class="cell mono" style="'+style+'display:flex;align-items:center;gap:2px;font-size:12px;">'
+        +esc(r.matricola)+badge+delBtn
+        +'</span></td>';
+    });
+    rowsHTML += '</tr>';
   }
+  tbody.innerHTML = rowsHTML || '<tr><td colspan="'+(cols.length+1)+'" class="empty">—</td></tr>';
 
-  var btnChiudi = document.getElementById('mat-btn-chiudi');
+  // Abilita/disabilita Chiudi Periodo
+  var btnChiudi=document.getElementById('mat-btn-chiudi');
   if(btnChiudi){
-    var haAnom = S.matricole.some(function(r){ return r.stato===MAT_STATI.ANOMALIA||r.stato==='duplicato'; });
-    btnChiudi.disabled = haAnom;
-    btnChiudi.style.opacity = haAnom ? '.4' : '1';
-    btnChiudi.style.cursor = haAnom ? 'not-allowed' : 'pointer';
+    var haAnom=S.matricole.some(function(r){ return r.stato===MAT_STATI.ANOMALIA||r.stato==='duplicato'; });
+    btnChiudi.disabled=haAnom;
+    btnChiudi.style.opacity=haAnom?'.4':'1';
+    btnChiudi.style.cursor=haAnom?'not-allowed':'pointer';
   }
 }
 
 function matRimuovi(id){
-  S.matricole = S.matricole.filter(function(r){ return r.id!==id; });
+  S.matricole=S.matricole.filter(function(r){ return r.id!==id; });
+  matRender(); markUnsaved();
+}
+function matRimuoviAvanzoById(id){
+  S.matricoleAvanzi=S.matricoleAvanzi.filter(function(r){ return r.id!==id; });
   matRender(); markUnsaved();
 }
 
-function matRimuoviAvanzo(i){
-  S.matricoleAvanzi.splice(i,1);
-  matRender(); markUnsaved();
-}
-
-function matCaricaCablotec(){}
-
+// Aggiunge manualmente scegliendo DDT da lista o nuovo
 function matAddManuale(){
-  var ddt = [];
-  S.matricole.concat(S.matricoleAvanzi).forEach(function(r){ if(r.ddtBellini && ddt.indexOf(r.ddtBellini)===-1) ddt.push(r.ddtBellini); });
-  var optsDdt = ddt.map(function(d){ return '<option value="'+esc(d)+'">'+esc(d)+'</option>'; }).join('');
-  document.getElementById('mtitle').textContent = 'Aggiungi Matricola';
-  document.getElementById('mbody').innerHTML = ''
-    +'<div class="field"><label>Matricola (10 cifre)</label><input id="m-mat-num" type="text" maxlength="10" placeholder="1234567890"></div>'
-    +'<div class="field"><label>DDT Bellini</label><select id="m-mat-ddt"><option value="">\u2014 nuovo DDT \u2014</option>'+optsDdt+'</select></div>'
-    +'<div class="field" id="m-mat-nuovo-wrap"><label>Nome nuovo DDT</label><input id="m-mat-nuovo" type="text" placeholder="es. 0412-2026"></div>'
+  var ddt=[];
+  S.matricole.forEach(function(r){ if(r.ddt&&r.ddt!=='—'&&ddt.indexOf(r.ddt)===-1) ddt.push(r.ddt); });
+  _matOpenModal(null, ddt);
+}
+// Aggiunge direttamente in una colonna specifica
+function matAddInColonna(col){
+  var ddt=[];
+  S.matricole.forEach(function(r){ if(r.ddt&&r.ddt!=='—'&&ddt.indexOf(r.ddt)===-1) ddt.push(r.ddt); });
+  _matOpenModal(col, ddt);
+}
+
+function _matOpenModal(ddtPresel, ddtList){
+  var opts=ddtList.map(function(d){ return '<option value="'+esc(d)+'"'+(d===ddtPresel?' selected':'')+'>'+esc(d)+'</option>'; }).join('');
+  document.getElementById('mtitle').textContent='Aggiungi Matricola';
+  document.getElementById('mbody').innerHTML=''
+    +'<div class="field"><label>Matricola (10 cifre)</label><input id="m-mat-num" type="text" maxlength="10" placeholder="1234567890" style="font-family:monospace;"></div>'
+    +'<div class="field"><label>DDT Bellini</label><select id="m-mat-ddt"><option value="">— nuovo DDT —</option>'+opts+'</select></div>'
+    +'<div class="field" id="m-mat-nuovo-wrap" style="display:'+(ddtPresel?'none':'block')+'"><label>Nome nuovo DDT</label><input id="m-mat-nuovo" type="text" placeholder="es. 0412-2026"></div>'
     +'<div class="field"><label>Data entrata</label><input id="m-mat-data" type="date" value="'+new Date().toISOString().substring(0,10)+'"></div>';
-  document.getElementById('mfoot').innerHTML = '<button class="btng" onclick="closeModal()">Annulla</button><button class="btnp" onclick="matSalvaManuale()">Salva</button>';
+  document.getElementById('mfoot').innerHTML='<button class="btng" onclick="closeModal()">Annulla</button><button class="btnp" onclick="matSalvaManuale()">Salva</button>';
   document.getElementById('modal').classList.add('open');
-  document.getElementById('m-mat-ddt').onchange = function(){
-    document.getElementById('m-mat-nuovo-wrap').style.display = this.value ? 'none' : 'block';
+  document.getElementById('m-mat-ddt').onchange=function(){
+    document.getElementById('m-mat-nuovo-wrap').style.display=this.value?'none':'block';
   };
-  document.getElementById('m-mat-ddt').dispatchEvent(new Event('change'));
 }
 
 function matSalvaManuale(){
-  var num = (document.getElementById('m-mat-num').value||'').trim();
+  var num=(document.getElementById('m-mat-num').value||'').trim();
   if(!/^\d{10}$/.test(num)){ alert('Inserisci una matricola di esattamente 10 cifre.'); return; }
-  var ddtSel = document.getElementById('m-mat-ddt').value;
-  var ddtNuovo = (document.getElementById('m-mat-nuovo').value||'').trim();
-  var ddt = ddtSel || ddtNuovo;
+  var ddtSel=document.getElementById('m-mat-ddt').value;
+  var ddtNuovo=(document.getElementById('m-mat-nuovo').value||'').trim();
+  var ddt=ddtSel||ddtNuovo;
   if(!ddt){ alert('Specifica il DDT Bellini.'); return; }
-  var data = document.getElementById('m-mat-data').value || new Date().toISOString().substring(0,10);
-  S.matricole.push({id:uid2(),matricola:num,ddtBellini:ddt,dataEntrata:data,stato:MAT_STATI.ATTESA,ddtCablotec:null,dataUscita:null});
+  var data=document.getElementById('m-mat-data').value||new Date().toISOString().substring(0,10);
+  // controlla duplicato
+  var dup=S.matricole.filter(function(r){ return r.matricola===num; });
+  if(dup.length){ dup.forEach(function(r){ if(r.stato===MAT_STATI.ATTESA) r.stato='duplicato'; }); }
+  S.matricole.push({id:uid2(),matricola:num,ddt:ddt,dataEntrata:data,stato:dup.length?'duplicato':MAT_STATI.ATTESA,ddtCablotec:null,dataUscita:null});
   closeModal(); matRender(); markUnsaved();
 }
 
 async function matChiudiPeriodo(){
-  var nAttesa = S.matricole.filter(function(r){ return r.stato===MAT_STATI.ATTESA; }).length;
-  var msg = nAttesa > 0
-    ? 'Chiudi periodo?\n\n'+nAttesa+' matricole in attesa verranno spostate negli Avanzi.\nLe uscite OK verranno rimosse.'
-    : 'Chiudi periodo?\n\nTutte le matricole sono uscite. La tabella verrà svuotata.';
-  var ok = await showConfirm(msg, 'Chiudi Periodo', 'Chiudi', 'var(--acc)');
+  var nAttesa=S.matricole.filter(function(r){ return r.stato===MAT_STATI.ATTESA; }).length;
+  var msg=nAttesa>0
+    ?'Chiudi periodo?\n\n'+nAttesa+' matricole "In attesa" verranno spostate negli Avanzi.\nLe uscite OK verranno rimosse.'
+    :'Chiudi periodo?\n\nTutte le matricole sono uscite. La tabella verrà svuotata.';
+  var ok=await showConfirm(msg,'Chiudi Periodo','Chiudi','var(--acc)');
   if(!ok) return;
   S.matricole.filter(function(r){ return r.stato===MAT_STATI.ATTESA; }).forEach(function(r){ S.matricoleAvanzi.push(r); });
-  S.matricole = [];
+  S.matricole=[];
   matRender(); markUnsaved();
 }
 
 function matExportXLSX(){
-  var tutti = S.matricoleAvanzi.concat(S.matricole);
+  var tutti=S.matricoleAvanzi.concat(S.matricole);
   if(!tutti.length){ alert('Nessuna matricola da esportare.'); return; }
-  var ws_data = [['Matricola','Stato','DDT Bellini','Data Entrata','DDT Cablotec','Data Uscita']];
-  tutti.forEach(function(r){
-    var sl = r.stato===MAT_STATI.OK?'Uscita OK':r.stato===MAT_STATI.ATTESA?'In attesa':r.stato===MAT_STATI.ANOMALIA?'Anomalia':'Duplicato';
-    ws_data.push([r.matricola, sl, r.ddtBellini||'', r.dataEntrata||'', r.ddtCablotec||'', r.dataUscita||'']);
-  });
-  var wb = XLSX.utils.book_new();
-  var ws = XLSX.utils.aoa_to_sheet(ws_data);
-  ws['!cols'] = [{wch:14},{wch:12},{wch:20},{wch:14},{wch:20},{wch:14}];
-  XLSX.utils.book_append_sheet(wb, ws, 'Matricole');
-  XLSX.writeFile(wb, 'matricole_'+new Date().toISOString().substring(0,10)+'.xlsx');
+  // Struttura colonnare come Excel originale
+  var cols=[];
+  if(S.matricoleAvanzi.length) cols.push('Avanzi');
+  S.matricole.forEach(function(r){ if(r.ddt&&cols.indexOf(r.ddt)===-1) cols.push(r.ddt); });
+  var colData={};
+  cols.forEach(function(c){ colData[c]=[]; });
+  S.matricoleAvanzi.forEach(function(r){ colData['Avanzi'].push(r.matricola); });
+  S.matricole.forEach(function(r){ if(r.ddt&&colData[r.ddt]) colData[r.ddt].push(r.matricola+(r.stato===MAT_STATI.OK?' ['+r.ddtCablotec+']':r.stato===MAT_STATI.ANOMALIA?' [ANOMALIA]':'')); });
+  var maxR=cols.reduce(function(m,c){ return Math.max(m,colData[c].length); },0);
+  var ws_data=[cols];
+  for(var i=0;i<maxR;i++){
+    ws_data.push(cols.map(function(c){ return colData[c][i]||''; }));
+  }
+  var wb=XLSX.utils.book_new();
+  var ws=XLSX.utils.aoa_to_sheet(ws_data);
+  ws['!cols']=cols.map(function(){ return {wch:16}; });
+  XLSX.utils.book_append_sheet(wb,ws,'Matricole');
+  XLSX.writeFile(wb,'matricole_'+new Date().toISOString().substring(0,10)+'.xlsx');
 }
 
 // ═══════════════════════════════════════════════════════════
