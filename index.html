@@ -2023,6 +2023,7 @@ var ddtTipo = 'in';
 var ddtArticoli = [];
 var ddtData = '';
 var ddtFileHash = null;
+var ddtFile = null;
 
 (function(){
   var dz = document.getElementById('ddt-dropzone');
@@ -2056,6 +2057,7 @@ async function ddtHashFile(file){
 }
 
 async function ddtAnalizza(file){
+  ddtFile = file;
   ddtStatus('🔄 Controllo duplicato...', 'processing');
   document.getElementById('ddt-dropzone').classList.add('processing');
   try{
@@ -2165,7 +2167,7 @@ function ddtAddRow(){
 }
 
 function ddtClear(){
-  ddtArticoli = []; ddtData = ''; ddtTipo = 'in';
+  ddtArticoli = []; ddtData = ''; ddtTipo = 'in'; ddtFile = null;
   document.getElementById('ddt-fileinfo').style.display = 'none';
   document.getElementById('ddt-fileinput').value = '';
   document.getElementById('ddt-tipo-selector').style.display = 'none';
@@ -2240,6 +2242,30 @@ async function ddtImportaMagazzino(){
   if(errors.length){
     alert('Import con errori:\n\n'+errors.join('\n')+'\n\nImportati: '+imported);
   } else {
+    // Estrai matricole automaticamente e aggiungile al tab Matricole
+    if(ddtFile && ddtFile.type === 'application/pdf'){
+      try {
+        var abuf = await ddtFile.arrayBuffer();
+        var pdfDoc = await pdfjsLib.getDocument({data: abuf}).promise;
+        var pdfText = '';
+        for(var pi = 1; pi <= pdfDoc.numPages; pi++){
+          var pg = await pdfDoc.getPage(pi);
+          var ct = await pg.getTextContent();
+          pdfText += ct.items.map(function(it){ return it.str; }).join(' ') + ' ';
+        }
+        var matMatches = (pdfText.match(/\b\d{10}\b/g) || []).filter(function(m,i,a){ return a.indexOf(m)===i; });
+        var matDir = ddtTipo === 'out' ? 'out' : 'in';
+        var matLista = matDir === 'in' ? S.matricoleIn : S.matricoleOut;
+        var matOggi = new Date().toISOString().substring(0,10);
+        var matNuove = 0;
+        matMatches.forEach(function(m){
+          var esiste = matLista.find(function(r){ return r.matricola===m && r.file===ddtFile.name; });
+          if(!esiste){ matLista.push({matricola:m, file:ddtFile.name, data:matOggi}); matNuove++; }
+        });
+        if(matNuove > 0){ matRender(); }
+      } catch(e){ /* ignora errori matricole */ }
+    }
+
     if(supa && ddtFileHash){
       await supa.from('ddt_hashes').upsert({
         hash: ddtFileHash,
