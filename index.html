@@ -2413,7 +2413,7 @@ function matRender(){
         +'<td><span class="cell mono">'+esc(r.dataEntrata||'\u2014')+'</span></td>'
         +'<td><span class="cell"><span class="badge '+bc+'">'+bl+'</span></span></td>'
         +'<td><span class="cell mono" style="font-size:10px;color:var(--mut)">'+esc(r.ddtCablotec||'\u2014')+'</span></td>'
-        +'<td><span class="cell"><button class="btnd" onclick="matRimuovi(''+r.id+'')">\u1f5d1</button></span></td>'
+        +'<td><span class="cell"><button class="btnd" onclick="matRimuovi(&quot;'+r.id+'&quot;)">&#x1f5d1;</button></span></td>'
         +'</tr>';
     }).join('');
   }
