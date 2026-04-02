@@ -400,6 +400,7 @@ tr.rip-rientrata td{opacity:.55;}
   <div class="toolbar">
     <h2>Matricole Bellini</h2>
     <button class="btng" onclick="matAddManuale()">+ Aggiungi</button>
+    <label class="btng" style="position:relative;cursor:pointer;">⬆ Importa Excel<input type="file" id="mat-import-file" accept=".xlsx,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="matImportaExcel(this.files[0])"></label>
     <button class="btng" onclick="matExportXLSX()">⬇ Esporta Excel</button>
     <button class="btng" id="mat-btn-selok" onclick="matSelezionaOK()" style="display:none;">☑ Seleziona uscite OK</button>
     <button class="btnd" id="mat-btn-elimsel" onclick="matEliminaSelezionati()" style="display:none;border-color:var(--red);color:var(--red);">🗑 Elimina selezionati</button>
@@ -2380,7 +2381,6 @@ function matRender(){
         +'<span class="cell mono" style="'+style+'display:flex;align-items:center;gap:2px;font-size:12px;">'
         +'<input type="checkbox" style="margin-right:4px;" data-id="'+r.id+'" onchange="matToggleCella(this)" '+(matSelected[r.id]?'checked':'')+'>'
         +esc(r.matricola)+badge
-        +'<button class="btnd" style="margin-left:auto;padding:1px 4px;" onclick="matRimuovi(\''+r.id+'\')">✕</button>'
         +'</span></td>';
     });
     rowsHTML += '</tr>';
@@ -2465,6 +2465,43 @@ function matSalvaManuale(){
   if(dup.length) dup.forEach(function(r){ if(r.stato===MAT_STATI.ATTESA) r.stato='duplicato'; });
   S.matricole.push({id:uid2(),matricola:num,ddt:ddt,dataEntrata:data,stato:dup.length?'duplicato':MAT_STATI.ATTESA,ddtCablotec:null,dataUscita:null});
   closeModal(); matRender(); markUnsaved();
+}
+
+function matImportaExcel(file){
+  if(!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try {
+      var wb = XLSX.read(e.target.result, {type:'array'});
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var data = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+      if(!data.length){ alert('File vuoto.'); return; }
+      // Prima riga = nomi DDT (colonne)
+      var headers = data[0];
+      var oggi = new Date().toISOString().substring(0,10);
+      var nuove = 0, skipped = 0;
+      for(var col=0; col<headers.length; col++){
+        var ddt = (headers[col]||'').toString().trim();
+        if(!ddt) continue;
+        for(var row=1; row<data.length; row++){
+          var val = (data[row][col]||'').toString().trim();
+          if(!val) continue;
+          // accetta solo sequenze di 10 cifre
+          var mat = val.replace(/\D/g,'');
+          if(mat.length !== 10){ skipped++; continue; }
+          // evita duplicati
+          var esiste = S.matricole.find(function(r){ return r.matricola===mat && r.ddt===ddt; });
+          if(esiste){ skipped++; continue; }
+          S.matricole.push({id:uid2(), matricola:mat, ddt:ddt, dataEntrata:oggi, stato:MAT_STATI.ATTESA, ddtCablotec:null, dataUscita:null});
+          nuove++;
+        }
+      }
+      matRender(); markUnsaved();
+      alert('✅ Importate '+nuove+' matricole.'+(skipped?' Saltate: '+skipped+' (duplicati o formato non valido).':''));
+      document.getElementById('mat-import-file').value='';
+    } catch(e){ alert('Errore lettura Excel: '+e.message); }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 function matExportXLSX(){
