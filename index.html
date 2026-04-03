@@ -404,6 +404,7 @@ tr.rip-rientrata td{opacity:.55;}
     <button class="btng" onclick="matExportXLSX()">⬇ Esporta Excel</button>
     <button class="btng" id="mat-btn-selok" onclick="matSelezionaOK()" style="display:none;">☑ Seleziona uscite OK</button>
     <button class="btnd" id="mat-btn-elimsel" onclick="matEliminaSelezionati()" style="display:none;border-color:var(--red);color:var(--red);">🗑 Elimina selezionati</button>
+    <button class="btnd" id="mat-btn-elimok" onclick="matEliminaOK()" style="display:none;border-color:var(--mut);color:var(--mut);">🗑 Elimina tutte le uscite OK</button>
   </div>
   <div class="kpis" id="mat-kpis" style="margin-bottom:14px;"></div>
   <!-- Tabella colonnare tipo Excel -->
@@ -1781,7 +1782,7 @@ function startRealtime(){
       if(isReadOnly && newData.data && newData.data.v){
         try{
           loadObj(newData.data);
-          renderCodici(); renderMovimenti(); renderOrdini();
+          renderCodici(); renderMovimenti(); renderOrdini(); matRender();
           var sv = new Date(newData.updated_at||Date.now());
           document.getElementById('savlbl').textContent='🔒 Aggiornato — '+fmtT(sv);
         } catch(e){}
@@ -1865,7 +1866,7 @@ async function tryRestore(){
       var o = JSON.parse(localStorage.getItem(LS)||'null');
       if(!o) return;
       loadObj(o);
-      renderCodici(); renderOrdini();
+      renderCodici(); renderOrdini(); matRender();
     } catch(e){}
     return;
   }
@@ -1884,7 +1885,7 @@ async function tryRestore(){
       var sv = new Date(res.data.updated_at);
       document.getElementById('savdot').className='savdot saved';
       document.getElementById('savlbl').textContent='Connesso — '+fmtD(sv.toISOString())+' '+fmtT(sv);
-      renderCodici(); renderMovimenti(); renderOrdini();
+      renderCodici(); renderMovimenti(); renderOrdini(); matRender();
     }
   } catch(e){
     setReadOnly(true, 'Errore connessione — modalità locale');
@@ -1976,7 +1977,7 @@ document.getElementById('fimp').addEventListener('change', function(e){
   var f = e.target.files[0]; if(!f) return;
   f.text().then(function(txt){
     loadObj(JSON.parse(txt));
-    renderCodici(); renderMovimenti(); renderOrdini();
+    renderCodici(); renderMovimenti(); renderOrdini(); matRender();
     autoSave();
   }).catch(function(err){ alert('Errore importazione: '+err.message); });
   e.target.value='';
@@ -1984,7 +1985,7 @@ document.getElementById('fimp').addEventListener('change', function(e){
 function askReset(){
   ask('Resettare tutti i dati?\nCodici, movimenti e ordini verranno eliminati.','Reset', function(){
     S={codici:[],movimenti:[],ordini:[]};nextId=1;
-    renderCodici(); renderMovimenti(); renderOrdini();
+    renderCodici(); renderMovimenti(); renderOrdini(); matRender();
     markUnsaved();
   });
 }
@@ -2326,6 +2327,8 @@ function matRender(){
   if(btnSel) btnSel.style.display = nOk > 0 ? '' : 'none';
   if(btnElim) btnElim.style.display = nSel > 0 ? '' : 'none';
   if(btnElim) btnElim.textContent = nSel > 0 ? '🗑 Elimina selezionati ('+nSel+')' : '🗑 Elimina selezionati';
+  var btnElimOk = document.getElementById('mat-btn-elimok');
+  if(btnElimOk) btnElimOk.style.display = nOk > 0 ? '' : 'none';
 
   if(!cols.length){
     if(empty) empty.style.display='block';
@@ -2336,7 +2339,7 @@ function matRender(){
   if(table) table.style.display='';
 
   // Intestazioni
-  var thHTML = '<tr><th style="width:28px;"><input type="checkbox" id="mat-chk-all" onchange="matToggleAll(this.checked)" title="Seleziona/deseleziona tutti"></th>';
+  var thHTML = '<tr><th style="width:28px;"></th>';
   cols.forEach(function(col){
     thHTML += '<th style="color:var(--grn);min-width:130px;">'
       +esc(col)
@@ -2355,9 +2358,6 @@ function matRender(){
   for(var ri=0; ri<maxRows; ri++){
     rowsHTML += '<tr>';
     // checkbox riga (solo se almeno una cella ha dati selezionabili)
-    var hasOK = cols.some(function(c){ return colData[c][ri] && colData[c][ri].stato===MAT_STATI.OK; });
-    var rowId = cols.map(function(c){ return colData[c][ri]?colData[c][ri].id:''; }).filter(Boolean).join(',');
-    rowsHTML += '<td><span class="cell">'+(rowId?'<input type="checkbox" data-ids="'+rowId+'" onchange="matToggleRow(this)" '+(matSelected[rowId]?'checked':'')+'>':"")+'</span></td>';
 
     cols.forEach(function(col){
       var r = colData[col][ri];
@@ -2377,10 +2377,11 @@ function matRender(){
       } else {
         style='color:var(--acc);';
       }
-      rowsHTML += '<td style="'+rowBg+'">'
-        +'<span class="cell mono" style="'+style+'display:flex;align-items:center;gap:2px;font-size:12px;">'
-        +'<input type="checkbox" style="margin-right:4px;" data-id="'+r.id+'" onchange="matToggleCella(this)" '+(matSelected[r.id]?'checked':'')+'>'
-        +esc(r.matricola)+badge
+      rowsHTML += '<td style="'+rowBg+';padding:0;">'
+        +'<span style="display:flex;align-items:center;gap:6px;padding:6px 10px;">'
+        +'<input type="checkbox" style="flex-shrink:0;cursor:pointer;accent-color:var(--acc);width:13px;height:13px;" data-id="'+r.id+'" onclick="event.stopPropagation();matToggleCella(this)" '+(matSelected[r.id]?'checked':'')+'>' 
+        +'<span class="mono" style="'+style+'font-size:12px;flex:1;">'+esc(r.matricola)+badge+'</span>'
+        +'<button onclick="event.stopPropagation();matRimuovi(\''+r.id+'\')" style="background:none;border:none;color:var(--mut);cursor:pointer;padding:0 2px;font-size:11px;opacity:.5;line-height:1;" title="Elimina">✕</button>'
         +'</span></td>';
     });
     rowsHTML += '</tr>';
@@ -2395,24 +2396,20 @@ function matToggleCella(cb){
   if(cb.checked) matSelected[id]=true; else delete matSelected[id];
   matRender();
 }
-function matToggleRow(cb){
-  var ids = (cb.getAttribute('data-ids')||'').split(',').filter(Boolean);
-  ids.forEach(function(id){
-    var r = S.matricole.find(function(x){ return x.id===id; });
-    if(r && r.stato===MAT_STATI.OK){
-      if(cb.checked) matSelected[id]=true; else delete matSelected[id];
-    }
-  });
-  matRender();
-}
-function matToggleAll(checked){
-  S.matricole.forEach(function(r){ if(r.stato===MAT_STATI.OK){ if(checked) matSelected[r.id]=true; else delete matSelected[r.id]; } });
-  matRender();
-}
 function matSelezionaOK(){
   S.matricole.forEach(function(r){ if(r.stato===MAT_STATI.OK) matSelected[r.id]=true; });
   matRender();
 }
+function matEliminaOK(){
+  var n = S.matricole.filter(function(r){ return r.stato===MAT_STATI.OK; }).length;
+  if(!n){ alert('Nessuna uscita OK da eliminare.'); return; }
+  ask('Eliminare tutte le '+n+' uscite OK?', 'Elimina', function(){
+    S.matricole = S.matricole.filter(function(r){ return r.stato!==MAT_STATI.OK; });
+    matSelected = {};
+    matRender(); markUnsaved();
+  });
+}
+
 function matEliminaSelezionati(){
   var ids = Object.keys(matSelected);
   if(!ids.length) return;
