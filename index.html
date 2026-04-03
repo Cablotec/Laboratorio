@@ -2339,12 +2339,15 @@ function matRender(){
   if(table) table.style.display='';
 
   // Intestazioni
-  var thHTML = '<tr><th style="width:28px;"></th>';
+  var thHTML = '<tr><th style="width:28px;color:var(--mut);font-size:10px;">#</th>';
   cols.forEach(function(col){
+    var colEsc = col.replace(/'/g,"\\'");
     thHTML += '<th style="color:var(--grn);min-width:130px;">'
+      +'<span style="display:flex;align-items:center;gap:4px;">'
       +esc(col)
-      +' <button class="btnd" style="font-size:9px;padding:1px 5px;margin-left:4px;" onclick="matAddInColonna(\''+col.replace(/\\/g,'\\\\').replace(/'/g,"\\'")+'\')">+</button>'
-      +'</th>';
+      +' <button class="btnd" style="font-size:9px;padding:1px 5px;" onclick="matAddInColonna(\''+colEsc+'\')" >+</button>'
+      +' <button class="btnd" style="font-size:9px;padding:1px 4px;color:var(--mut);" onclick="matEliminaColonna(\''+colEsc+'\')">🗑</button>'
+      +'</span></th>';
   });
   thHTML += '</tr>';
   thead.innerHTML = thHTML;
@@ -2356,7 +2359,7 @@ function matRender(){
 
   var rowsHTML = '';
   for(var ri=0; ri<maxRows; ri++){
-    rowsHTML += '<tr>';
+    rowsHTML += '<tr><td><span class="cell mono" style="color:var(--mut);font-size:10px;">'+(ri+1)+'</span></td>';
     // checkbox riga (solo se almeno una cella ha dati selezionabili)
 
     cols.forEach(function(col){
@@ -2400,6 +2403,16 @@ function matSelezionaOK(){
   S.matricole.forEach(function(r){ if(r.stato===MAT_STATI.OK) matSelected[r.id]=true; });
   matRender();
 }
+function matEliminaColonna(col){
+  var n = S.matricole.filter(function(r){ return r.ddt===col; }).length;
+  ask('Eliminare la colonna "'+col+'" con '+n+' matricole?', 'Elimina', function(){
+    S.matricole = S.matricole.filter(function(r){ return r.ddt!==col; });
+    // pulisci selezioni orfane
+    Object.keys(matSelected).forEach(function(id){ if(!S.matricole.find(function(r){ return r.id===id; })) delete matSelected[id]; });
+    matRender(); markUnsaved();
+  });
+}
+
 function matEliminaOK(){
   var n = S.matricole.filter(function(r){ return r.stato===MAT_STATI.OK; }).length;
   if(!n){ alert('Nessuna uscita OK da eliminare.'); return; }
