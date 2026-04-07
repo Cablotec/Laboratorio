@@ -447,9 +447,7 @@ tr.rip-rientrata td{opacity:.55;}
     <div class="savdot" id="savdot"></div>
     <span id="savlbl">Nessuna modifica</span>
   </div>
-  <label class="bimp">Importa<input type="file" id="fimp" accept=".json"></label>
   <button class="bexp2" onclick="exportJSON()">Esporta JSON</button>
-  <button class="btng" onclick="askReset()">Reset Dati</button>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -1967,24 +1965,6 @@ async function exportJSON(){
     alert('Export non riuscito — apri il file in locale per il download diretto.');
   }
 }
-document.getElementById('fimp').addEventListener('change', function(e){
-  if(isReadOnly){ alert('Sola lettura — non puoi importare'); return; }
-  var f = e.target.files[0]; if(!f) return;
-  f.text().then(function(txt){
-    loadObj(JSON.parse(txt));
-    renderCodici(); renderMovimenti(); renderOrdini(); matRender();
-    autoSave();
-  }).catch(function(err){ alert('Errore importazione: '+err.message); });
-  e.target.value='';
-});
-function askReset(){
-  ask('Resettare tutti i dati?\nCodici, movimenti e ordini verranno eliminati.','Reset', function(){
-    S={codici:[],movimenti:[],ordini:[]};nextId=1;
-    renderCodici(); renderMovimenti(); renderOrdini(); matRender();
-    markUnsaved();
-  });
-}
-
 
 // ═══════════════════════════════════════════════════════════
 // ESTRATTORE DDT
