@@ -402,13 +402,8 @@ tr.rip-rientrata td{opacity:.55;}
     <button class="btng" onclick="matAddManuale()">+ Aggiungi</button>
     <label class="btng" style="position:relative;cursor:pointer;">⬆ Importa Excel<input type="file" id="mat-import-file" accept=".xlsx,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="matImportaExcel(this.files[0])"></label>
     <button class="btng" onclick="matExportXLSX()">⬇ Esporta Excel</button>
-    <button class="btng" id="mat-btn-selok" onclick="matSelezionaOK()" style="display:none;">☑ Seleziona uscite OK</button>
-    <button class="btnd" id="mat-btn-elimsel" onclick="matEliminaSelezionati()" style="display:none;border-color:var(--red);color:var(--red);">🗑 Elimina selezionati</button>
-    <button class="btnd" id="mat-btn-elimok" onclick="matEliminaOK()" style="display:none;border-color:var(--mut);color:var(--mut);">🗑 Elimina tutte le uscite OK</button>
   </div>
-  <div class="kpis" id="mat-kpis" style="margin-bottom:14px;"></div>
-  <!-- Tabella colonnare tipo Excel -->
-  <div class="tw" id="mat-table-wrap">
+  <div class="tw">
     <div class="empty" id="mat-empty">Nessuna matricola — i DDT Bellini vengono aggiunti automaticamente dall'Estrattore DDT</div>
     <table class="rt" id="mat-main-table" style="display:none;">
       <thead id="mat-thead"></thead>
@@ -2276,21 +2271,18 @@ function ddtToBase64(file){
 // ═══════════════════════════════════════════════════════════
 // MATRICOLE
 // ═══════════════════════════════════════════════════════════
+// S.matricole: [{id, matricola, ddt, dataEntrata}]
+// Colonne = DDT, righe = matricole. Nessuno stato.
 
 function uid2(){ return 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 
-var matSelected = {}; // id -> true
-
+// Chiamata dall'estrattore DDT (entrata): aggiunge matricole alla colonna DDT
+// Chiamata dall'estrattore DDT (uscita): elimina le matricole corrispondenti
 function matSegnaUscita(matricola, ddtCablotec, data){
-  var r = S.matricole.find(function(x){ return x.matricola===matricola && (x.stato===MAT_STATI.ATTESA||x.stato==='duplicato'); });
-  if(r){
-    r.stato = MAT_STATI.OK;
-    r.ddtCablotec = ddtCablotec;
-    r.dataUscita = data;
+  var idx = S.matricole.findIndex(function(x){ return x.matricola===matricola; });
+  if(idx !== -1){
+    S.matricole.splice(idx, 1);
     return true;
-  }
-  if(!S.matricole.find(function(x){ return x.matricola===matricola && x.ddtCablotec===ddtCablotec; })){
-    S.matricole.push({id:uid2(),matricola:matricola,ddt:'—',dataEntrata:null,stato:MAT_STATI.ANOMALIA,ddtCablotec:ddtCablotec,dataUscita:data});
   }
   return false;
 }
@@ -2300,180 +2292,110 @@ function matRender(){
   var table = document.getElementById('mat-main-table');
   var thead = document.getElementById('mat-thead');
   var tbody = document.getElementById('mat-tbody');
-  var kpiEl = document.getElementById('mat-kpis');
   if(!tbody) return;
 
+  // Colonne = DDT distinti nell'ordine di inserimento
   var cols = [];
-  S.matricole.forEach(function(r){ if(r.ddt && cols.indexOf(r.ddt)===-1) cols.push(r.ddt); });
-
-  var nAttesa=0,nOk=0,nAnom=0,nDup=0;
   S.matricole.forEach(function(r){
-    if(r.stato===MAT_STATI.ATTESA) nAttesa++;
-    else if(r.stato===MAT_STATI.OK) nOk++;
-    else if(r.stato===MAT_STATI.ANOMALIA) nAnom++;
-    else if(r.stato==='duplicato') nDup++;
+    if(r.ddt && cols.indexOf(r.ddt) === -1) cols.push(r.ddt);
   });
-  if(kpiEl) kpiEl.innerHTML=
-    '<div class="kpi"><div class="kl">Totale</div><div class="kv ka">'+S.matricole.length+'</div></div>'
-    +'<div class="kpi"><div class="kl">In attesa</div><div class="kv ky">'+nAttesa+'</div></div>'
-    +'<div class="kpi"><div class="kl">Uscite OK</div><div class="kv kg">'+nOk+'</div></div>'
-    +'<div class="kpi"><div class="kl">Anomalie</div><div class="kv kr">'+nAnom+'</div></div>'
-    +(nDup?'<div class="kpi"><div class="kl">Duplicati</div><div class="kv" style="color:var(--or)">'+nDup+'</div></div>':'');
-
-  // Mostra/nascondi bottoni selezione
-  var nSel = Object.keys(matSelected).length;
-  var btnSel = document.getElementById('mat-btn-selok');
-  var btnElim = document.getElementById('mat-btn-elimsel');
-  if(btnSel) btnSel.style.display = nOk > 0 ? '' : 'none';
-  if(btnElim) btnElim.style.display = nSel > 0 ? '' : 'none';
-  if(btnElim) btnElim.textContent = nSel > 0 ? '🗑 Elimina selezionati ('+nSel+')' : '🗑 Elimina selezionati';
-  var btnElimOk = document.getElementById('mat-btn-elimok');
-  if(btnElimOk) btnElimOk.style.display = nOk > 0 ? '' : 'none';
 
   if(!cols.length){
-    if(empty) empty.style.display='block';
-    if(table) table.style.display='none';
+    if(empty) empty.style.display = 'block';
+    if(table) table.style.display = 'none';
     return;
   }
-  if(empty) empty.style.display='none';
-  if(table) table.style.display='';
+  if(empty) empty.style.display = 'none';
+  if(table) table.style.display = '';
 
-  // Intestazioni
+  // Intestazioni: numero riga + una colonna per DDT
   var thHTML = '<tr><th style="width:28px;color:var(--mut);font-size:10px;">#</th>';
   cols.forEach(function(col){
-    var colEsc = col.replace(/'/g,"\\'");
+    var colEsc = col.replace(/'/g, "\\'");
     thHTML += '<th style="color:var(--grn);min-width:130px;">'
-      +'<span style="display:flex;align-items:center;gap:4px;">'
-      +esc(col)
-      +' <button class="btnd" style="font-size:9px;padding:1px 5px;" onclick="matAddInColonna(\''+colEsc+'\')" >+</button>'
-      +' <button class="btnd" style="font-size:9px;padding:1px 4px;color:var(--mut);" onclick="matEliminaColonna(\''+colEsc+'\')">🗑</button>'
-      +'</span></th>';
+      + '<span style="display:flex;align-items:center;gap:6px;">'
+      + esc(col)
+      + '<button class="btng" style="font-size:10px;padding:2px 6px;" onclick="matAddInColonna(\''+colEsc+'\')">+</button>'
+      + '<button class="btnd" style="font-size:10px;padding:2px 5px;" onclick="matEliminaColonna(\''+colEsc+'\')" title="Elimina colonna DDT">🗑</button>'
+      + '</span>'
+      + '</th>';
   });
   thHTML += '</tr>';
   thead.innerHTML = thHTML;
 
-  // Righe colonnari
+  // Dati per colonna
   var colData = {};
-  cols.forEach(function(col){ colData[col] = S.matricole.filter(function(r){ return r.ddt===col; }); });
-  var maxRows = cols.reduce(function(m,c){ return Math.max(m,colData[c].length); },0);
+  cols.forEach(function(col){
+    colData[col] = S.matricole.filter(function(r){ return r.ddt === col; });
+  });
+  var maxRows = cols.reduce(function(m,c){ return Math.max(m, colData[c].length); }, 0);
 
+  // Righe
   var rowsHTML = '';
-  for(var ri=0; ri<maxRows; ri++){
+  for(var ri = 0; ri < maxRows; ri++){
     rowsHTML += '<tr><td><span class="cell mono" style="color:var(--mut);font-size:10px;">'+(ri+1)+'</span></td>';
-    // checkbox riga (solo se almeno una cella ha dati selezionabili)
-
     cols.forEach(function(col){
       var r = colData[col][ri];
       if(!r){ rowsHTML += '<td></td>'; return; }
-      var isSel = matSelected[r.id];
-      var style='', badge='', rowBg='';
-      if(r.stato===MAT_STATI.OK){
-        style='text-decoration:line-through;opacity:'+(isSel?'1':'0.45')+';color:'+(isSel?'var(--acc)':'var(--mut)')+';';
-        badge='<span class="badge bok" style="font-size:9px;margin-left:3px;">'+esc(r.ddtCablotec||'OK')+'</span>';
-        if(isSel) rowBg='background:rgba(78,255,163,.07);';
-      } else if(r.stato===MAT_STATI.ANOMALIA){
-        style='color:var(--red);';
-        badge='<span class="badge berr" style="font-size:9px;margin-left:3px;">❌</span>';
-      } else if(r.stato==='duplicato'){
-        style='color:var(--or);';
-        badge='<span class="badge bor" style="font-size:9px;margin-left:3px;">⚠️</span>';
-      } else {
-        style='color:var(--acc);';
-      }
-      rowsHTML += '<td style="'+rowBg+';padding:0;">'
-        +'<span style="display:flex;align-items:center;gap:6px;padding:6px 10px;">'
-        +'<input type="checkbox" style="flex-shrink:0;cursor:pointer;accent-color:var(--acc);width:13px;height:13px;" data-id="'+r.id+'" onclick="event.stopPropagation();matToggleCella(this)" '+(matSelected[r.id]?'checked':'')+'>' 
-        +'<span class="mono" style="'+style+'font-size:12px;flex:1;">'+esc(r.matricola)+badge+'</span>'
-        +'<button onclick="event.stopPropagation();matRimuovi(\''+r.id+'\')" style="background:none;border:none;color:var(--mut);cursor:pointer;padding:0 2px;font-size:11px;opacity:.5;line-height:1;" title="Elimina">✕</button>'
-        +'</span></td>';
+      rowsHTML += '<td>'
+        + '<span style="display:flex;align-items:center;gap:4px;padding:6px 10px;">'
+        + '<span class="mono" style="color:var(--acc);font-size:12px;flex:1;">'+esc(r.matricola)+'</span>'
+        + '<button onclick="matRimuovi(\''+r.id+'\')" style="background:none;border:none;color:var(--mut);cursor:pointer;font-size:11px;opacity:.5;padding:0 2px;line-height:1;" title="Elimina">✕</button>'
+        + '</span>'
+        + '</td>';
     });
     rowsHTML += '</tr>';
   }
-  tbody.innerHTML = rowsHTML || '<tr><td colspan="'+(cols.length+1)+'" class="empty">—</td></tr>';
+  tbody.innerHTML = rowsHTML;
 }
 
-function matToggleCella(cb){
-  var id = cb.getAttribute('data-id');
-  var r = S.matricole.find(function(x){ return x.id===id; });
-  if(!r || r.stato!==MAT_STATI.OK){ cb.checked=false; return; }
-  if(cb.checked) matSelected[id]=true; else delete matSelected[id];
-  matRender();
-}
-function matSelezionaOK(){
-  S.matricole.forEach(function(r){ if(r.stato===MAT_STATI.OK) matSelected[r.id]=true; });
-  matRender();
-}
-function matEliminaColonna(col){
-  var n = S.matricole.filter(function(r){ return r.ddt===col; }).length;
-  ask('Eliminare la colonna "'+col+'" con '+n+' matricole?', 'Elimina', function(){
-    S.matricole = S.matricole.filter(function(r){ return r.ddt!==col; });
-    // pulisci selezioni orfane
-    Object.keys(matSelected).forEach(function(id){ if(!S.matricole.find(function(r){ return r.id===id; })) delete matSelected[id]; });
-    matRender(); markUnsaved();
-  });
-}
-
-function matEliminaOK(){
-  var n = S.matricole.filter(function(r){ return r.stato===MAT_STATI.OK; }).length;
-  if(!n){ alert('Nessuna uscita OK da eliminare.'); return; }
-  ask('Eliminare tutte le '+n+' uscite OK?', 'Elimina', function(){
-    S.matricole = S.matricole.filter(function(r){ return r.stato!==MAT_STATI.OK; });
-    matSelected = {};
-    matRender(); markUnsaved();
-  });
-}
-
-function matEliminaSelezionati(){
-  var ids = Object.keys(matSelected);
-  if(!ids.length) return;
-  var n = ids.length;
-  ask('Eliminare '+n+' matricole selezionate?', 'Elimina', function(){
-    S.matricole = S.matricole.filter(function(r){ return !matSelected[r.id]; });
-    matSelected = {};
-    matRender(); markUnsaved();
-  });
-}
 function matRimuovi(id){
-  S.matricole = S.matricole.filter(function(r){ return r.id!==id; });
-  delete matSelected[id];
+  S.matricole = S.matricole.filter(function(r){ return r.id !== id; });
   matRender(); markUnsaved();
 }
 
+function matEliminaColonna(col){
+  var n = S.matricole.filter(function(r){ return r.ddt === col; }).length;
+  ask('Eliminare la colonna "'+col+'" con '+n+' matricole?', 'Elimina', function(){
+    S.matricole = S.matricole.filter(function(r){ return r.ddt !== col; });
+    matRender(); markUnsaved();
+  });
+}
+
 function matAddManuale(){
-  var ddt=[];
-  S.matricole.forEach(function(r){ if(r.ddt&&r.ddt!=='—'&&ddt.indexOf(r.ddt)===-1) ddt.push(r.ddt); });
+  var ddt = [];
+  S.matricole.forEach(function(r){ if(r.ddt && ddt.indexOf(r.ddt) === -1) ddt.push(r.ddt); });
   _matOpenModal(null, ddt);
 }
 function matAddInColonna(col){
-  var ddt=[];
-  S.matricole.forEach(function(r){ if(r.ddt&&r.ddt!=='—'&&ddt.indexOf(r.ddt)===-1) ddt.push(r.ddt); });
+  var ddt = [];
+  S.matricole.forEach(function(r){ if(r.ddt && ddt.indexOf(r.ddt) === -1) ddt.push(r.ddt); });
   _matOpenModal(col, ddt);
 }
 function _matOpenModal(ddtPresel, ddtList){
-  var opts=ddtList.map(function(d){ return '<option value="'+esc(d)+'"'+(d===ddtPresel?' selected':'')+'>'+esc(d)+'</option>'; }).join('');
-  document.getElementById('mtitle').textContent='Aggiungi Matricola';
-  document.getElementById('mbody').innerHTML=''
-    +'<div class="field"><label>Matricola (10 cifre)</label><input id="m-mat-num" type="text" maxlength="10" placeholder="1234567890" style="font-family:monospace;letter-spacing:.1em;"></div>'
-    +'<div class="field"><label>DDT Bellini</label><select id="m-mat-ddt"><option value="">— nuovo DDT —</option>'+opts+'</select></div>'
-    +'<div class="field" id="m-mat-nuovo-wrap" style="display:'+(ddtPresel?'none':'block')+'"><label>Nome nuovo DDT</label><input id="m-mat-nuovo" type="text" placeholder="es. 0412-2026"></div>'
-    +'<div class="field"><label>Data entrata</label><input id="m-mat-data" type="date" value="'+new Date().toISOString().substring(0,10)+'"></div>';
-  document.getElementById('mfoot').innerHTML='<button class="btng" onclick="closeModal()">Annulla</button><button class="btnp" onclick="matSalvaManuale()">Salva</button>';
+  var opts = ddtList.map(function(d){ return '<option value="'+esc(d)+'"'+(d===ddtPresel?' selected':'')+'>'+esc(d)+'</option>'; }).join('');
+  document.getElementById('mtitle').textContent = 'Aggiungi Matricola';
+  document.getElementById('mbody').innerHTML = ''
+    + '<div class="field"><label>Matricola (10 cifre)</label><input id="m-mat-num" type="text" maxlength="10" placeholder="1234567890" style="font-family:monospace;letter-spacing:.1em;"></div>'
+    + '<div class="field"><label>DDT Bellini</label><select id="m-mat-ddt"><option value="">— nuovo DDT —</option>'+opts+'</select></div>'
+    + '<div class="field" id="m-mat-nuovo-wrap" style="display:'+(ddtPresel?'none':'block')+'"><label>Nome nuovo DDT</label><input id="m-mat-nuovo" type="text" placeholder="es. 506-2026"></div>'
+    + '<div class="field"><label>Data entrata</label><input id="m-mat-data" type="date" value="'+new Date().toISOString().substring(0,10)+'"></div>';
+  document.getElementById('mfoot').innerHTML = '<button class="btng" onclick="closeModal()">Annulla</button><button class="btnp" onclick="matSalvaManuale()">Salva</button>';
   document.getElementById('modal').classList.add('open');
-  document.getElementById('m-mat-ddt').onchange=function(){
-    document.getElementById('m-mat-nuovo-wrap').style.display=this.value?'none':'block';
+  document.getElementById('m-mat-ddt').onchange = function(){
+    document.getElementById('m-mat-nuovo-wrap').style.display = this.value ? 'none' : 'block';
   };
 }
 function matSalvaManuale(){
-  var num=(document.getElementById('m-mat-num').value||'').trim();
+  var num = (document.getElementById('m-mat-num').value||'').trim();
   if(!/^\d{10}$/.test(num)){ alert('Inserisci una matricola di esattamente 10 cifre.'); return; }
-  var ddtSel=document.getElementById('m-mat-ddt').value;
-  var ddtNuovo=(document.getElementById('m-mat-nuovo').value||'').trim();
-  var ddt=ddtSel||ddtNuovo;
+  var ddtSel = document.getElementById('m-mat-ddt').value;
+  var ddtNuovo = (document.getElementById('m-mat-nuovo').value||'').trim();
+  var ddt = ddtSel || ddtNuovo;
   if(!ddt){ alert('Specifica il DDT Bellini.'); return; }
-  var data=document.getElementById('m-mat-data').value||new Date().toISOString().substring(0,10);
-  var dup=S.matricole.filter(function(r){ return r.matricola===num; });
-  if(dup.length) dup.forEach(function(r){ if(r.stato===MAT_STATI.ATTESA) r.stato='duplicato'; });
-  S.matricole.push({id:uid2(),matricola:num,ddt:ddt,dataEntrata:data,stato:dup.length?'duplicato':MAT_STATI.ATTESA,ddtCablotec:null,dataUscita:null});
+  var data = document.getElementById('m-mat-data').value || new Date().toISOString().substring(0,10);
+  if(S.matricole.find(function(r){ return r.matricola===num && r.ddt===ddt; })){ alert('Matricola già presente in questo DDT.'); return; }
+  S.matricole.push({id:uid2(), matricola:num, ddt:ddt, dataEntrata:data});
   closeModal(); matRender(); markUnsaved();
 }
 
@@ -2486,7 +2408,6 @@ function matImportaExcel(file){
       var ws = wb.Sheets[wb.SheetNames[0]];
       var data = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
       if(!data.length){ alert('File vuoto.'); return; }
-      // Prima riga = nomi DDT (colonne)
       var headers = data[0];
       var oggi = new Date().toISOString().substring(0,10);
       var nuove = 0, skipped = 0;
@@ -2496,44 +2417,36 @@ function matImportaExcel(file){
         for(var row=1; row<data.length; row++){
           var val = (data[row][col]||'').toString().trim();
           if(!val) continue;
-          // accetta solo sequenze di 10 cifre
           var mat = val.replace(/\D/g,'');
           if(mat.length !== 10){ skipped++; continue; }
-          // evita duplicati
-          var esiste = S.matricole.find(function(r){ return r.matricola===mat && r.ddt===ddt; });
-          if(esiste){ skipped++; continue; }
-          S.matricole.push({id:uid2(), matricola:mat, ddt:ddt, dataEntrata:oggi, stato:MAT_STATI.ATTESA, ddtCablotec:null, dataUscita:null});
+          if(S.matricole.find(function(r){ return r.matricola===mat && r.ddt===ddt; })){ skipped++; continue; }
+          S.matricole.push({id:uid2(), matricola:mat, ddt:ddt, dataEntrata:oggi});
           nuove++;
         }
       }
       matRender(); markUnsaved();
-      alert('✅ Importate '+nuove+' matricole.'+(skipped?' Saltate: '+skipped+' (duplicati o formato non valido).':''));
+      alert('Importate '+nuove+' matricole.'+(skipped?' Saltate: '+skipped+'.':''));
       document.getElementById('mat-import-file').value='';
-    } catch(e){ alert('Errore lettura Excel: '+e.message); }
+    } catch(e){ alert('Errore: '+e.message); }
   };
   reader.readAsArrayBuffer(file);
 }
 
 function matExportXLSX(){
   if(!S.matricole.length){ alert('Nessuna matricola da esportare.'); return; }
-  var cols=[];
-  S.matricole.forEach(function(r){ if(r.ddt&&cols.indexOf(r.ddt)===-1) cols.push(r.ddt); });
-  var colData={};
+  var cols = [];
+  S.matricole.forEach(function(r){ if(r.ddt && cols.indexOf(r.ddt)===-1) cols.push(r.ddt); });
+  var colData = {};
   cols.forEach(function(c){ colData[c]=[]; });
-  S.matricole.forEach(function(r){
-    if(r.ddt&&colData[r.ddt]){
-      var val=r.matricola+(r.stato===MAT_STATI.OK?' ['+r.ddtCablotec+']':r.stato===MAT_STATI.ANOMALIA?' [ANOMALIA]':'');
-      colData[r.ddt].push(val);
-    }
-  });
-  var maxR=cols.reduce(function(m,c){ return Math.max(m,colData[c].length); },0);
-  var ws_data=[cols];
+  S.matricole.forEach(function(r){ if(colData[r.ddt]) colData[r.ddt].push(r.matricola); });
+  var maxR = cols.reduce(function(m,c){ return Math.max(m,colData[c].length); },0);
+  var ws_data = [cols];
   for(var i=0;i<maxR;i++) ws_data.push(cols.map(function(c){ return colData[c][i]||''; }));
-  var wb=XLSX.utils.book_new();
-  var ws=XLSX.utils.aoa_to_sheet(ws_data);
-  ws['!cols']=cols.map(function(){ return {wch:18}; });
-  XLSX.utils.book_append_sheet(wb,ws,'Matricole');
-  XLSX.writeFile(wb,'matricole_'+new Date().toISOString().substring(0,10)+'.xlsx');
+  var wb = XLSX.utils.book_new();
+  var ws = XLSX.utils.aoa_to_sheet(ws_data);
+  ws['!cols'] = cols.map(function(){ return {wch:14}; });
+  XLSX.utils.book_append_sheet(wb, ws, 'Matricole');
+  XLSX.writeFile(wb, 'matricole_'+new Date().toISOString().substring(0,10)+'.xlsx');
 }
 
 // ═══════════════════════════════════════════════════════════
