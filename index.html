@@ -2208,8 +2208,8 @@ async function ddtImportaMagazzino(){
         var matOggi = ddtArticoli.length ? ddtArticoli[0].data : new Date().toISOString().substring(0,10);
         if(ddtTipo === 'in'){
           matMatches.forEach(function(m){
-            var esiste = S.matricole.find(function(r){ return r.matricola===m && r.ddtBellini===ddtFile.name; });
-            if(!esiste) S.matricole.push({id:uid2(),matricola:m,ddtBellini:ddtFile.name,dataEntrata:matOggi,stato:MAT_STATI.ATTESA,ddtCablotec:null,dataUscita:null});
+            var esiste = S.matricole.find(function(r){ return r.matricola===m && r.ddt===ddtFile.name; });
+            if(!esiste) S.matricole.push({id:uid2(), matricola:m, ddt:ddtFile.name, dataEntrata:matOggi});
           });
         } else {
           // Uscita: marca le matricole corrispondenti come OK
