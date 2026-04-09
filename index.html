@@ -2215,8 +2215,8 @@ async function ddtImportaMagazzino(){
           // Uscita: marca le matricole corrispondenti come OK
           matMatches.forEach(function(m){ matSegnaUscita(m, ddtFile.name, matOggi); });
         }
-        matRender();
-      } catch(e){ /* ignora errori matricole */ }
+        matRender(); markUnsaved();
+      } catch(e){ console.error('[MAT] errore estrazione matricole:', e); }
     }
 
     if(supa && ddtFileHash){
