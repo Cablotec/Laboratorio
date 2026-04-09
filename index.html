@@ -402,6 +402,7 @@ tr.rip-rientrata td{opacity:.55;}
     <button class="btng" onclick="matAddManuale()">+ Aggiungi</button>
     <label class="btng" style="position:relative;cursor:pointer;">⬆ Importa Excel<input type="file" id="mat-import-file" accept=".xlsx,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="matImportaExcel(this.files[0])"></label>
     <button class="btng" onclick="matExportXLSX()">⬇ Esporta Excel</button>
+    <input type="text" id="mat-search" class="search" placeholder="Cerca matricola..." oninput="matRender()" style="width:180px;">
   </div>
   <div class="tw">
     <div class="empty" id="mat-empty">Nessuna matricola — i DDT Bellini vengono aggiunti automaticamente dall'Estrattore DDT</div>
@@ -2040,7 +2041,7 @@ async function ddtAnalizza(file){
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY},
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 400,
+        max_tokens: 8192,
         messages:[{
           role:'user',
           content:[
@@ -2064,7 +2065,6 @@ async function ddtAnalizza(file){
       if(c==="\n"||c==="\r"||c==="\t") return c;
       return "";
     });
-    console.log('[DDT] jsonStr:', jsonStr);
     var parsed = JSON.parse(jsonStr);
     ddtData = parsed.data || new Date().toISOString().substring(0,10);
     ddtTipo = parsed.tipo === 'uscita' ? 'out' : 'in';
@@ -2283,6 +2283,10 @@ function matRender(){
   var tbody = document.getElementById('mat-tbody');
   if(!tbody) return;
 
+  // Filtro ricerca
+  var searchEl = document.getElementById('mat-search');
+  var q = searchEl ? searchEl.value.trim().toLowerCase() : '';
+
   // Colonne = DDT distinti nell'ordine di inserimento
   var cols = [];
   S.matricole.forEach(function(r){
@@ -2315,8 +2319,14 @@ function matRender(){
   // Dati per colonna
   var colData = {};
   cols.forEach(function(col){
-    colData[col] = S.matricole.filter(function(r){ return r.ddt === col; });
+    colData[col] = S.matricole.filter(function(r){
+      if(r.ddt !== col) return false;
+      if(q) return r.matricola.toLowerCase().indexOf(q) !== -1;
+      return true;
+    });
   });
+  // Nascondi colonne vuote dopo il filtro
+  if(q) cols = cols.filter(function(col){ return colData[col].length > 0; });
   var maxRows = cols.reduce(function(m,c){ return Math.max(m, colData[c].length); }, 0);
 
   // Righe
