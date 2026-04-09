@@ -2054,9 +2054,18 @@ async function ddtAnalizza(file){
     var data = await resp.json();
     if(!data.content || !data.content[0]) throw new Error('Risposta non valida: '+(data.error ? data.error.message : JSON.stringify(data)));
     var text = data.content[0].text;
+    // Rimuovi backtick markdown e cerca il JSON
+    text = text.replace(/```json/g,"").replace(/```/g,"").trim();
     var match = text.match(/\{[\s\S]*\}/);
     if(!match) throw new Error('JSON non trovato');
-    var parsed = JSON.parse(match[0]);
+    var jsonStr = match[0];
+    // Rimuovi caratteri di controllo che rompono JSON.parse
+    jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, function(c){
+      if(c==="\n"||c==="\r"||c==="\t") return c;
+      return "";
+    });
+    console.log('[DDT] jsonStr:', jsonStr);
+    var parsed = JSON.parse(jsonStr);
     ddtData = parsed.data || new Date().toISOString().substring(0,10);
     ddtTipo = parsed.tipo === 'uscita' ? 'out' : 'in';
     ddtArticoli = (parsed.articoli||[]).map(function(a){
