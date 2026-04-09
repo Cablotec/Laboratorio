@@ -450,15 +450,15 @@ tr.rip-rientrata td{opacity:.55;}
   <button class="bexp2" onclick="exportJSON()">Esporta JSON</button>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════
 // STATE & UTILS
 // ═══════════════════════════════════════════════════════════
 var LS = 'cablotec_magazzino_v2';
 var S = {codici:[], movimenti:[], ordini:[], matricole:[]};
-if(typeof pdfjsLib !== 'undefined') pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+if(typeof pdfjsLib !== 'undefined') pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+// worker configurato
 var MAT_STATI = {ATTESA:'attesa', OK:'ok', ANOMALIA:'anomalia'};
 var nextId = 1;
 var currentTab = 'codici';
