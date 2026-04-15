@@ -2343,16 +2343,34 @@ function matRender(){
     cols.forEach(function(col){
       var r = colData[col][ri];
       if(!r){ rowsHTML += '<td></td>'; return; }
-      rowsHTML += '<td>'
-        + '<span style="display:flex;align-items:center;gap:4px;padding:6px 10px;">'
-        + '<span class="mono" style="color:var(--acc);font-size:12px;flex:1;">'+esc(r.matricola)+'</span>'
-        + '<button onclick="matRimuovi(\''+r.id+'\')" style="background:none;border:none;color:var(--mut);cursor:pointer;font-size:11px;opacity:.5;padding:0 2px;line-height:1;" title="Elimina">✕</button>'
+      rowsHTML += '<td style="padding:0;">'
+        + '<span style="display:flex;align-items:center;">'
+        + '<input type="text" value="'+esc(r.matricola)+'" maxlength="10" '
+        + 'data-id="'+r.id+'" '
+        + 'style="background:transparent;border:none;outline:none;color:var(--acc);font-family:\'DM Mono\',monospace;font-size:12px;padding:8px 10px;width:100%;min-width:110px;" '
+        + 'onchange="matUpdateMatricola(this)" '
+        + 'onfocus="this.style.background=\'rgba(212,255,78,.06)\'" '
+        + 'onblur="this.style.background=\'transparent\'" '
+        + '>'
+        + '<button onclick="matRimuovi(\''+r.id+'\')" style="background:none;border:none;color:var(--mut);cursor:pointer;font-size:11px;opacity:.4;padding:0 6px;flex-shrink:0;" title="Elimina">✕</button>'
         + '</span>'
         + '</td>';
     });
     rowsHTML += '</tr>';
   }
   tbody.innerHTML = rowsHTML;
+}
+
+function matUpdateMatricola(input){
+  var id = input.getAttribute('data-id');
+  var val = input.value.trim();
+  if(!/^\d{10}$/.test(val)){
+    input.style.color = 'var(--red)';
+    return;
+  }
+  input.style.color = 'var(--acc)';
+  var r = S.matricole.find(function(x){ return x.id===id; });
+  if(r){ r.matricola = val; markUnsaved(); }
 }
 
 function matRimuovi(id){
