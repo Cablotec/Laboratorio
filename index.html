@@ -1899,7 +1899,14 @@ function loadObj(o){
   S.codici = o.codici||[];
   S.movimenti = o.movimenti||[];
   S.ordini = o.ordini||[];
-  S.matricole = o.matricole||[];
+  S.matricole = (o.matricole||[]).filter(function(r){
+    // Scarta record con vecchia struttura (hanno stato/ddtCablotec) o ddt non validi
+    if(!r.matricola || !r.ddt) return false;
+    if(r.ddt === '__avanzi__' || r.ddt === 'Avanzi') return false;
+    // Normalizza: rimuovi campi vecchi non necessari
+    delete r.stato; delete r.ddtCablotec; delete r.dataUscita;
+    return true;
+  });
   // migrazione da vecchio formato
   if(o.matricoleIn) o.matricoleIn.forEach(function(r){ S.matricole.push({id:uid2(),matricola:r.matricola,ddt:r.file,dataEntrata:r.data,stato:MAT_STATI.ATTESA,ddtCablotec:null,dataUscita:null}); });
   nextId = o.nextId||1;
@@ -2213,7 +2220,7 @@ async function ddtImportaMagazzino(){
           var ct = await pg.getTextContent();
           pdfText += ct.items.map(function(it){ return it.str; }).join(' ') + ' ';
         }
-        var matMatches = (pdfText.match(/\b\d{10}\b/g) || []).filter(function(m,i,a){ return a.indexOf(m)===i; });
+        var matMatches = (pdfText.match(/(?<!\d)\d{10}(?!\d)/g) || []).filter(function(m,i,a){ return a.indexOf(m)===i; });
         var matOggi = ddtArticoli.length ? ddtArticoli[0].data : new Date().toISOString().substring(0,10);
         if(ddtTipo === 'in'){
           matMatches.forEach(function(m){
