@@ -2335,28 +2335,25 @@ function matRender(){
   if(table) table.style.display = '';
 
 
-  // Dati per colonna
+  // Calcola duplicati
+  var matCount = {};
+  S.matricole.forEach(function(r){ matCount[r.matricola] = (matCount[r.matricola]||0)+1; });
+
+  // Dati per colonna — tutte le colonne sempre visibili
   var colData = {};
   cols.forEach(function(col){
-    colData[col] = S.matricole.filter(function(r){
-      if(r.ddt !== col) return false;
-      if(q) return r.matricola.toLowerCase().indexOf(q) !== -1;
-      return true;
-    });
+    colData[col] = S.matricole.filter(function(r){ return r.ddt === col; });
   });
-  // Nascondi colonne vuote dopo il filtro
-  if(q) cols = cols.filter(function(col){ return colData[col].length > 0; });
 
-  // Intestazioni (costruite dopo il filtro)
-  // Intestazioni: numero riga + una colonna per DDT
+  // Intestazioni
   var thHTML = '<tr><th style="width:28px;color:var(--mut);font-size:10px;">#</th>';
   cols.forEach(function(col){
-    var colEsc = col.replace(/'/g, "\\'");
+    var colEsc = col.replace(/'/g, "\'");
     thHTML += '<th style="color:var(--grn);min-width:130px;">'
       + '<span style="display:flex;align-items:center;gap:6px;">'
       + esc(col)
-      + '<button class="btnd" style="font-size:10px;padding:2px 5px;" onclick="matRinominaColonna(\''+colEsc+'\')" title="Rinomina">✎</button>'
-      + '<button class="btnd" style="font-size:10px;padding:2px 5px;" onclick="matEliminaColonna(\''+colEsc+'\')" title="Elimina colonna DDT">🗑</button>'
+      + '<button class="btnd" style="font-size:10px;padding:2px 5px;" onclick="matRinominaColonna(&quot;'+colEsc+'&quot;)" title="Rinomina">✎</button>'
+      + '<button class="btnd" style="font-size:10px;padding:2px 5px;" onclick="matEliminaColonna(&quot;'+colEsc+'&quot;)" title="Elimina colonna">🗑</button>'
       + '</span>'
       + '</th>';
   });
@@ -2371,16 +2368,27 @@ function matRender(){
     cols.forEach(function(col){
       var r = colData[col][ri];
       if(!r){ rowsHTML += '<td></td>'; return; }
-      rowsHTML += '<td style="padding:0;">'
+      var isDup = matCount[r.matricola] > 1;
+      var isMatch = q && r.matricola.toLowerCase().indexOf(q) !== -1;
+      var colore = isDup ? 'var(--or)' : 'var(--acc)';
+      var bgCell = isMatch ? 'background:rgba(255,204,78,.18);' : '';
+      var tooltip = isDup ? '⚠️ Duplicato' : '';
+      rowsHTML += '<td style="padding:0;'+bgCell+'">'
         + '<span style="display:flex;align-items:center;">'
         + '<input type="text" value="'+esc(r.matricola)+'" maxlength="10" '
         + 'data-id="'+r.id+'" '
-        + 'style="background:transparent;border:none;outline:none;color:var(--acc);font-family:\'DM Mono\',monospace;font-size:12px;padding:8px 10px;width:100%;min-width:110px;" '
+        + 'title="'+tooltip+'" '
+        + 'style="background:transparent;border:none;outline:none;'
+        + 'color:'+colore+';'
+        + (isDup ? 'font-weight:700;' : '')
+        + 'font-family:\'DM Mono\',monospace;font-size:12px;padding:8px 10px;width:100%;min-width:110px;" '
         + 'onchange="matUpdateMatricola(this)" '
         + 'onfocus="this.style.background=\'rgba(212,255,78,.06)\'" '
         + 'onblur="this.style.background=\'transparent\'" '
         + '>'
-        + '<button onclick="matRimuovi(\''+r.id+'\')" style="background:none;border:none;color:var(--mut);cursor:pointer;font-size:11px;opacity:.4;padding:0 6px;flex-shrink:0;" title="Elimina">✕</button>'
+        + '<button onclick="matRimuovi(\''+r.id+'\')" '
+        + 'style="background:none;border:none;color:var(--mut);cursor:pointer;font-size:11px;opacity:.4;padding:0 6px;flex-shrink:0;" '
+        + 'title="Elimina">✕</button>'
         + '</span>'
         + '</td>';
     });
