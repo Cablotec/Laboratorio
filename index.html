@@ -2068,7 +2068,7 @@ async function ddtAnalizza(file){
           content:[
             { type: file.type==='application/pdf' ? 'document' : 'image',
               source:{ type:'base64', media_type:file.type, data:base64 } },
-            { type:'text', text:'Analizza questo DDT italiano. Estrai codice articolo e quantità. Le quantità hanno la virgola come separatore decimale italiano (10,000 significa 10 pezzi). Restituisci la quantità ESATTAMENTE come appare nel documento, come stringa. Ignora seriali, descrizioni, prezzi. Rispondi SOLO con JSON: {"data":"YYYY-MM-DD","tipo":"entrata o uscita","articoli":[{"codice":"XXX","quantita":"10,000"}]}' }
+            { type:'text', text:'Analizza questo DDT italiano. Estrai codice articolo e quantità.\n\nREGOLE CRITICHE PER IL CODICE:\n- Trascrivi il codice articolo CARATTERE PER CARATTERE, ESATTAMENTE come appare nel documento.\n- NON rimuovere zeri (anche se sembrano "iniziali" all\'interno del codice, es. "MOTR11027E8AE19HAX" non è "MOTR1102E8AE19HAX").\n- NON interpretare numeri come decimali: i codici sono stringhe alfanumeriche opache.\n- NON normalizzare, NON correggere, NON accorpare cifre.\n- Conta le cifre due volte se necessario per essere sicuro.\n\nQUANTITÀ:\n- Le quantità hanno la virgola come separatore decimale italiano (10,000 significa 10 pezzi).\n- Restituisci la quantità ESATTAMENTE come appare nel documento, come stringa.\n\nIgnora seriali, descrizioni, prezzi. Rispondi SOLO con JSON: {"data":"YYYY-MM-DD","tipo":"entrata o uscita","articoli":[{"codice":"XXX","quantita":"10,000"}]}' }
           ]
         }]
       })
@@ -2099,10 +2099,50 @@ async function ddtAnalizza(file){
       } else if(typeof qtyRaw === 'number'){
         qty = Math.round(qtyRaw);
       }
-      return { data: ddtData, codice: a.codice||'', qty: qty };
+      var codice = (a.codice||'').trim();
+      // Auto-correzione: se il codice estratto dall'AI non compare nel testo del PDF,
+      // ma esiste una sua variante "estesa" (con cifra in più, tipica perdita di zero/cifra
+      // dovuta a interpretazione numerica), sostituisci col codice presente nel PDF.
+      if(codice && ddtPdfText && codice.length >= 6){
+        var pdfUpper = ddtPdfText.toUpperCase();
+        var codUpper = codice.toUpperCase();
+        if(pdfUpper.indexOf(codUpper) < 0){
+          // Cerca codici simili nel PDF: stesso prefisso alfa + stesso suffisso alfa,
+          // con parte numerica centrale che può differire di 1-2 cifre.
+          // Pattern generico: sequenze alfanumeriche di lunghezza simile (±3) che
+          // contengono il prefisso/suffisso alfabetico del codice.
+          var prefMatch = codUpper.match(/^[A-Z]+/);
+          var suffMatch = codUpper.match(/[A-Z]+$/);
+          if(prefMatch && suffMatch && prefMatch[0].length >= 2){
+            var pref = prefMatch[0];
+            var suff = suffMatch[0];
+            // Cerca tutte le occorrenze nel PDF che iniziano col prefisso e finiscono col suffisso
+            var re = new RegExp('\\b'+pref+'[A-Z0-9]{'+(codUpper.length-pref.length-suff.length-1)+','+(codUpper.length-pref.length-suff.length+3)+'}'+suff+'\\b', 'g');
+            var matches = pdfUpper.match(re);
+            if(matches && matches.length){
+              // Preferisci match più lungo (più cifre = probabile codice corretto)
+              matches.sort(function(a,b){ return b.length - a.length; });
+              var corretto = matches[0];
+              // Recupera case originale dal PDF
+              var idx = pdfUpper.indexOf(corretto);
+              if(idx >= 0) codice = ddtPdfText.substr(idx, corretto.length);
+              console.log('[DDT] Codice auto-corretto: "'+a.codice+'" → "'+codice+'"');
+            }
+          }
+        }
+      }
+      return { data: ddtData, codice: codice, qty: qty };
     });
     ddtRender();
-    ddtStatus('✅ '+ddtArticoli.length+' articoli estratti', 'success');
+    // Conta codici sconosciuti
+    var sconosciuti = ddtArticoli.filter(function(r){
+      return r.codice && !S.codici.find(function(c){ return c.codice.toLowerCase()===r.codice.toLowerCase(); });
+    }).length;
+    if(sconosciuti > 0){
+      ddtStatus('✅ '+ddtArticoli.length+' articoli estratti — ⚠️ '+sconosciuti+' codice/i non in anagrafica', 'success');
+    } else {
+      ddtStatus('✅ '+ddtArticoli.length+' articoli estratti', 'success');
+    }
   } catch(e){
     ddtStatus('❌ Errore: '+e.message, 'error');
     ddtFileHash = null;
@@ -2116,9 +2156,14 @@ function ddtRender(){
   ddtUpdateTipoBtn();
   var tbody = document.getElementById('ddt-tbody');
   tbody.innerHTML = ddtArticoli.map(function(r, i){
-    return '<tr>'+
+    var noto = r.codice && S.codici.find(function(c){ return c.codice.toLowerCase()===r.codice.toLowerCase(); });
+    var badgeNuovo = (r.codice && !noto)
+      ? '<span title="Codice non presente in anagrafica — verrà creato all\'importazione" style="display:inline-block;background:rgba(255,193,7,.18);border:1px solid var(--yel);color:var(--yel);font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:6px;letter-spacing:.04em;vertical-align:middle;">NUOVO</span>'
+      : '';
+    var rowBg = (r.codice && !noto) ? 'background:rgba(255,193,7,.06);' : '';
+    return '<tr style="'+rowBg+'">'+
       '<td><input type="date" value="'+r.data+'" class="mono" style="background:transparent;border:none;color:var(--txt);padding:8px 10px;font-size:12px;outline:none;width:100%;" onchange="ddtArticoli['+i+'].data=this.value"></td>'+
-      '<td><input type="text" value="'+esc(r.codice)+'" class="mono" style="background:transparent;border:none;color:var(--txt);padding:8px 10px;font-size:12px;outline:none;width:100%;" onchange="ddtArticoli['+i+'].codice=this.value"></td>'+
+      '<td style="white-space:nowrap;"><input type="text" value="'+esc(r.codice)+'" class="mono" style="background:transparent;border:none;color:var(--txt);padding:8px 10px;font-size:12px;outline:none;width:calc(100% - 70px);" onchange="ddtArticoli['+i+'].codice=this.value;ddtRender()">'+badgeNuovo+'</td>'+
       '<td><input type="number" value="'+r.qty+'" min="1" class="mono" style="background:transparent;border:none;color:var(--txt);padding:8px 10px;font-size:12px;outline:none;width:100%;" onchange="ddtArticoli['+i+'].qty=parseInt(this.value)||1"></td>'+
       '<td><button class="btnd" onclick="ddtArticoli.splice('+i+',1);ddtRender()">🗑</button></td>'+
     '</tr>';
@@ -2178,13 +2223,20 @@ async function ddtImportaMagazzino(){
 
   var sommario = '<div style="font-family:monospace;font-size:11px;line-height:2;">';
   sommario += '<div style="margin-bottom:10px;font-size:13px;font-weight:700;color:'+(ddtTipo==='out'?'var(--or)':'var(--grn)')+'">'+tipoLabel+' — '+righe.length+' articoli</div>';
+  var nuoviCodici = [];
   righe.forEach(function(r){
+    var noto = S.codici.find(function(c){ return c.codice.toLowerCase()===r.codice.toLowerCase(); });
+    if(!noto) nuoviCodici.push(r.codice);
+    var badge = !noto ? ' <span style="background:rgba(255,193,7,.18);border:1px solid var(--yel);color:var(--yel);font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;">NUOVO</span>' : '';
     sommario += '<div style="display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid var(--brd);padding:3px 0;">'
-      +'<span style="color:var(--or)">'+esc(r.codice)+'</span>'
+      +'<span style="color:var(--or)">'+esc(r.codice)+badge+'</span>'
       +'<span style="color:var(--txt)">'+r.qty+' pz</span>'
       +'<span style="color:var(--mut)">'+r.data+'</span>'
       +'</div>';
   });
+  if(nuoviCodici.length){
+    sommario += '<div style="margin-top:10px;padding:8px;background:rgba(255,193,7,.08);border:1px solid var(--yel);border-radius:4px;color:var(--yel);font-size:11px;">⚠ '+nuoviCodici.length+' codice/i non in anagrafica verranno creati automaticamente: <strong>'+nuoviCodici.map(esc).join(', ')+'</strong></div>';
+  }
   if(previewErrors.length){
     sommario += '<div style="margin-top:10px;color:var(--red)">'+previewErrors.join('<br>')+'</div>';
   }
