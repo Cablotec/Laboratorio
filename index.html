@@ -325,6 +325,8 @@ tr.rip-rientrata td{opacity:.55;}
     <h2>Ordini di Acquisto</h2>
     <input type="text" id="searchOrd" class="search" placeholder="Cerca ordine..." oninput="renderOrdini()">
     <button class="btnp" onclick="addOrdine()">+ Nuovo Ordine</button>
+    <label class="btng" style="position:relative;cursor:pointer;">⬆ Importa Excel<input type="file" id="ord-import-file" accept=".xlsx,.xlsm,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="ordImportaExcel(this.files[0])"></label>
+    <button class="btnd" onclick="ordCancellaTutti()">🗑 Cancella tutti</button>
   </div>
   <div class="tw">
     <table class="rt">
@@ -1545,6 +1547,171 @@ function delOrdine(id){
     renderCodici();
     markUnsaved();
   });
+}
+
+// ═══════════════════════════════════════════════════════════
+// IMPORT MASSIVO ORDINI da Richieste_Cablotec.xlsm
+// Foglio "Consegne di Cablotec": riga date + matrice codice × data
+// Una cella non vuota = un ordine (codice, data, qty)
+// ═══════════════════════════════════════════════════════════
+async function ordImportaExcel(file){
+  if(!file) return;
+  var fileInput = document.getElementById('ord-import-file');
+  var reader = new FileReader();
+  reader.onload = async function(e){
+    try {
+      var wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
+      // Cerca il foglio "Consegne di Cablotec" (o variante case-insensitive)
+      var sheetName = wb.SheetNames.find(function(n){ return n.toLowerCase().indexOf('consegne')>=0 && n.toLowerCase().indexOf('cablotec')>=0; });
+      if(!sheetName){
+        // fallback: usa il primo foglio
+        sheetName = wb.SheetNames[0];
+      }
+      var ws = wb.Sheets[sheetName];
+      var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
+      if(!rows.length){ alert('Foglio vuoto: '+sheetName); fileInput.value=''; return; }
+
+      // Trova riga date: la prima riga in cui >=10 celle sono Date
+      var dateRowIdx = -1;
+      for(var r = 0; r < Math.min(5, rows.length); r++){
+        var nDates = (rows[r]||[]).filter(function(v){ return v instanceof Date; }).length;
+        if(nDates >= 10){ dateRowIdx = r; break; }
+      }
+      if(dateRowIdx < 0){ alert('Riga delle date non trovata in "'+sheetName+'". Controlla che le date siano nelle prime 5 righe.'); fileInput.value=''; return; }
+      var dateRow = rows[dateRowIdx];
+
+      // Trova colonna codice: la colonna con il maggior numero di stringhe alfanumeriche
+      // (lunghezza >=5 e contenente cifre, tipico dei codici articolo).
+      // Scartiamo colonne che sembrano categorie (poche righe, solo lettere).
+      var codCol = -1, codColScore = 0;
+      for(var c = 0; c < Math.min(8, dateRow.length); c++){
+        var nCod = 0;
+        for(var rr = dateRowIdx+1; rr < rows.length; rr++){
+          var v = rows[rr] && rows[rr][c];
+          if(typeof v === 'string'){
+            var s = v.trim();
+            // Codice tipico: >=5 char, contiene almeno una cifra
+            if(s.length >= 5 && /\d/.test(s)) nCod++;
+          }
+        }
+        if(nCod > codColScore){ codColScore = nCod; codCol = c; }
+      }
+      if(codCol < 0 || codColScore < 3){ alert('Colonna codici non trovata (servono almeno 3 codici alfanumerici).'); fileInput.value=''; return; }
+
+      // Estrai (codice, data, qty)
+      var estratti = [];
+      for(var rr = dateRowIdx+1; rr < rows.length; rr++){
+        var row = rows[rr]; if(!row) continue;
+        var cod = row[codCol]; if(typeof cod !== 'string') continue;
+        cod = cod.trim(); if(!cod) continue;
+        for(var c = codCol+1; c < dateRow.length; c++){
+          var dt = dateRow[c]; if(!(dt instanceof Date)) continue;
+          var val = row[c];
+          if(val == null || val === '') continue;
+          var qty = (typeof val === 'number') ? val : parseFloat(String(val).replace(',','.'));
+          if(isNaN(qty) || qty <= 0) continue;
+          qty = Math.round(qty);
+          var iso = dt.toISOString().substring(0,10);
+          estratti.push({codice: cod, data: iso, qty: qty});
+        }
+      }
+
+      if(!estratti.length){ alert('Nessun ordine trovato nel foglio "'+sheetName+'".'); fileInput.value=''; return; }
+
+      // Suddividi: codici noti vs sconosciuti
+      var noti = [], sconosciuti = [];
+      var codiciSconosciutiUniq = {};
+      estratti.forEach(function(o){
+        var c = S.codici.find(function(x){ return x.codice.toLowerCase() === o.codice.toLowerCase(); });
+        if(c){
+          noti.push({codice: o.codice, data: o.data, qty: o.qty, codId: c.id});
+        } else {
+          sconosciuti.push(o);
+          codiciSconosciutiUniq[o.codice] = (codiciSconosciutiUniq[o.codice]||0) + 1;
+        }
+      });
+
+      // Costruisci preview: riassunto + checkboxes per codici sconosciuti
+      var ordiniAttuali = S.ordini.length;
+      var html = '<div style="font-family:monospace;font-size:11px;line-height:1.7;max-height:60vh;overflow-y:auto;">';
+      html += '<div style="margin-bottom:10px;font-size:13px;font-weight:700;color:var(--or);">⚠ SOSTITUZIONE COMPLETA</div>';
+      html += '<div style="color:var(--mut);margin-bottom:8px;">Verranno <strong style="color:var(--red)">cancellati '+ordiniAttuali+' ordini esistenti</strong> e ricreati dal foglio "<strong>'+esc(sheetName)+'</strong>".</div>';
+      html += '<div style="border-top:1px solid var(--brd);padding-top:8px;margin-top:8px;">';
+      html += '<div style="color:var(--grn);">✓ '+noti.length+' ordini con codice in anagrafica</div>';
+      if(Object.keys(codiciSconosciutiUniq).length){
+        html += '<div style="color:var(--yel);margin-top:10px;">⚠ '+sconosciuti.length+' ordini con codici NON in anagrafica ('+Object.keys(codiciSconosciutiUniq).length+' codici unici):</div>';
+        html += '<div style="margin-top:8px;background:var(--sur2);border:1px solid var(--brd);border-radius:4px;padding:8px;">';
+        Object.keys(codiciSconosciutiUniq).sort().forEach(function(cod, i){
+          var occ = codiciSconosciutiUniq[cod];
+          html += '<label style="display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;">'
+            + '<input type="checkbox" class="ord-imp-new" data-cod="'+esc(cod)+'" checked style="cursor:pointer;">'
+            + '<span style="color:var(--or);flex:1;">'+esc(cod)+'</span>'
+            + '<span style="color:var(--mut);font-size:10px;">'+occ+' ordini</span>'
+            + '</label>';
+        });
+        html += '</div>';
+        html += '<div style="color:var(--mut);font-size:10px;margin-top:6px;">Spuntati = verranno creati come nuovi codici. Deselezionati = righe scartate.</div>';
+      }
+      html += '</div></div>';
+
+      var ok = await showConfirm(html, 'Importa ordini da Excel', 'Sostituisci tutto', 'var(--yel)');
+      if(!ok){ fileInput.value=''; return; }
+
+      // Raccogli scelte sui codici sconosciuti
+      var creaCod = {};
+      document.querySelectorAll('.ord-imp-new').forEach(function(cb){
+        creaCod[cb.dataset.cod] = cb.checked;
+      });
+
+      // ESEGUI: cancella tutti gli ordini esistenti, poi reinserisci
+      S.ordini = [];
+      var importati = 0, scartati = 0;
+      noti.forEach(function(o){
+        S.ordini.push({id:uid(), rif:'Import Cablotec', data:o.data, codId:o.codId, qtyOrd:o.qty, qtyRes:o.qty});
+        importati++;
+      });
+      sconosciuti.forEach(function(o){
+        if(creaCod[o.codice]){
+          var esistente = S.codici.find(function(x){ return x.codice.toLowerCase() === o.codice.toLowerCase(); });
+          if(!esistente){
+            esistente = {id:uid(), codice:o.codice, desc:'', um:'pz'};
+            S.codici.push(esistente);
+          }
+          S.ordini.push({id:uid(), rif:'Import Cablotec', data:o.data, codId:esistente.id, qtyOrd:o.qty, qtyRes:o.qty});
+          importati++;
+        } else {
+          scartati++;
+        }
+      });
+
+      renderOrdini(); renderCodici(); markUnsaved();
+      var msg = '✅ Import completato\n\n• Ordini importati: '+importati+'\n• Righe scartate: '+scartati+'\n• Foglio letto: '+sheetName;
+      alert(msg);
+      fileInput.value='';
+    } catch(err){
+      alert('Errore durante l\'import: '+err.message);
+      console.error(err);
+      fileInput.value='';
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function ordCancellaTutti(){
+  if(!S.ordini.length){ alert('Non ci sono ordini da cancellare.'); return; }
+  var n = S.ordini.length;
+  var aperti = S.ordini.filter(function(o){ return o.qtyRes > 0; }).length;
+  var html = '<div style="font-family:monospace;font-size:12px;line-height:1.8;">'
+    + '<div style="color:var(--red);font-weight:700;margin-bottom:8px;">⚠ Operazione irreversibile</div>'
+    + '<div>Verranno cancellati <strong>tutti i '+n+' ordini</strong>'
+    + (aperti ? ' (di cui <strong style="color:var(--yel)">'+aperti+' ancora aperti</strong>)' : '')
+    + '.</div>'
+    + '<div style="color:var(--mut);margin-top:10px;font-size:11px;">I movimenti di magazzino non verranno toccati. Solo gli ordini.</div>'
+    + '</div>';
+  var ok = await showConfirm(html, 'Cancellare TUTTI gli ordini?', 'Cancella tutto', 'var(--red)');
+  if(!ok) return;
+  S.ordini = [];
+  renderOrdini(); renderCodici(); markUnsaved();
 }
 
 // ═══════════════════════════════════════════════════════════
