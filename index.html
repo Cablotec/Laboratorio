@@ -1551,8 +1551,12 @@ function delOrdine(id){
 
 // ═══════════════════════════════════════════════════════════
 // IMPORT MASSIVO ORDINI da Richieste_Cablotec.xlsm
-// Foglio "Consegne di Cablotec": riga date + matrice codice × data
-// Una cella non vuota = un ordine (codice, data, qty)
+// Foglio "Richieste Apparati a Cablotec":
+//   - Riga 0: header (CODICE, etichette mese, ecc.)
+//   - Riga 1: date (in tutte le colonne con valore Date — incluse "In JMA al:")
+//   - Col A: codice articolo
+//   - Celle: quantità richiesta per (codice, data)
+// Una cella numerica > 0 = un ordine (codice, data, qty)
 // ═══════════════════════════════════════════════════════════
 async function ordImportaExcel(file){
   if(!file) return;
@@ -1561,62 +1565,57 @@ async function ordImportaExcel(file){
   reader.onload = async function(e){
     try {
       var wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
-      // Cerca il foglio "Consegne di Cablotec" (o variante case-insensitive)
-      var sheetName = wb.SheetNames.find(function(n){ return n.toLowerCase().indexOf('consegne')>=0 && n.toLowerCase().indexOf('cablotec')>=0; });
+      // Cerca il foglio "Richieste Apparati a Cablotec" (case-insensitive, fuzzy)
+      var sheetName = wb.SheetNames.find(function(n){
+        var l = n.toLowerCase();
+        return l.indexOf('richieste')>=0 && l.indexOf('apparati')>=0;
+      });
       if(!sheetName){
-        // fallback: usa il primo foglio
-        sheetName = wb.SheetNames[0];
+        alert('Foglio "Richieste Apparati a Cablotec" non trovato nel file.\n\nFogli disponibili:\n• ' + wb.SheetNames.join('\n• '));
+        fileInput.value=''; return;
       }
       var ws = wb.Sheets[sheetName];
       var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
-      if(!rows.length){ alert('Foglio vuoto: '+sheetName); fileInput.value=''; return; }
+      if(rows.length < 3){ alert('Foglio "'+sheetName+'" ha meno di 3 righe.'); fileInput.value=''; return; }
 
-      // Trova riga date: la prima riga in cui >=10 celle sono Date
-      var dateRowIdx = -1;
-      for(var r = 0; r < Math.min(5, rows.length); r++){
-        var nDates = (rows[r]||[]).filter(function(v){ return v instanceof Date; }).length;
-        if(nDates >= 10){ dateRowIdx = r; break; }
+      // Riga 1 = date (zero-based; nel foglio Excel è la riga 2)
+      var dateRow = rows[1] || [];
+      var headerRow = rows[0] || [];
+      // Colonna 0 = codice
+      var codCol = 0;
+
+      // Raccogli colonne che contengono una Date in riga 1 E che hanno header riga 0 vuoto.
+      // Questo esclude colonne come "In JMA al:" (col C) che è una data di stato giacenza,
+      // non una data di ordine. Le vere colonne ordine hanno header riga 0 vuoto perché
+      // il mese ("Aprile"/"Maggio") è scritto nelle colonne aggregate (D/E/F).
+      var dateCols = [];
+      for(var c = 0; c < dateRow.length; c++){
+        if(!(dateRow[c] instanceof Date)) continue;
+        var hdr = headerRow[c];
+        if(hdr != null && String(hdr).trim() !== '') continue; // salta colonne etichettate
+        dateCols.push(c);
       }
-      if(dateRowIdx < 0){ alert('Riga delle date non trovata in "'+sheetName+'". Controlla che le date siano nelle prime 5 righe.'); fileInput.value=''; return; }
-      var dateRow = rows[dateRowIdx];
+      if(!dateCols.length){ alert('Nessuna data ordine trovata nel foglio "'+sheetName+'" (cerco date in riga 2 con header riga 1 vuoto).'); fileInput.value=''; return; }
 
-      // Trova colonna codice: la colonna con il maggior numero di stringhe alfanumeriche
-      // (lunghezza >=5 e contenente cifre, tipico dei codici articolo).
-      // Scartiamo colonne che sembrano categorie (poche righe, solo lettere).
-      var codCol = -1, codColScore = 0;
-      for(var c = 0; c < Math.min(8, dateRow.length); c++){
-        var nCod = 0;
-        for(var rr = dateRowIdx+1; rr < rows.length; rr++){
-          var v = rows[rr] && rows[rr][c];
-          if(typeof v === 'string'){
-            var s = v.trim();
-            // Codice tipico: >=5 char, contiene almeno una cifra
-            if(s.length >= 5 && /\d/.test(s)) nCod++;
-          }
-        }
-        if(nCod > codColScore){ codColScore = nCod; codCol = c; }
-      }
-      if(codCol < 0 || codColScore < 3){ alert('Colonna codici non trovata (servono almeno 3 codici alfanumerici).'); fileInput.value=''; return; }
-
-      // Estrai (codice, data, qty)
+      // Estrai (codice, data, qty) — partendo dalla riga 2 (i dati veri)
       var estratti = [];
-      for(var rr = dateRowIdx+1; rr < rows.length; rr++){
+      for(var rr = 2; rr < rows.length; rr++){
         var row = rows[rr]; if(!row) continue;
         var cod = row[codCol]; if(typeof cod !== 'string') continue;
         cod = cod.trim(); if(!cod) continue;
-        for(var c = codCol+1; c < dateRow.length; c++){
-          var dt = dateRow[c]; if(!(dt instanceof Date)) continue;
+        for(var i = 0; i < dateCols.length; i++){
+          var c = dateCols[i];
           var val = row[c];
           if(val == null || val === '') continue;
           var qty = (typeof val === 'number') ? val : parseFloat(String(val).replace(',','.'));
           if(isNaN(qty) || qty <= 0) continue;
           qty = Math.round(qty);
-          var iso = dt.toISOString().substring(0,10);
+          var iso = dateRow[c].toISOString().substring(0,10);
           estratti.push({codice: cod, data: iso, qty: qty});
         }
       }
 
-      if(!estratti.length){ alert('Nessun ordine trovato nel foglio "'+sheetName+'".'); fileInput.value=''; return; }
+      if(!estratti.length){ alert('Nessun ordine con quantità > 0 trovato nel foglio "'+sheetName+'".'); fileInput.value=''; return; }
 
       // Suddividi: codici noti vs sconosciuti
       var noti = [], sconosciuti = [];
@@ -1631,17 +1630,18 @@ async function ordImportaExcel(file){
         }
       });
 
-      // Costruisci preview: riassunto + checkboxes per codici sconosciuti
+      // Costruisci preview
       var ordiniAttuali = S.ordini.length;
       var html = '<div style="font-family:monospace;font-size:11px;line-height:1.7;max-height:60vh;overflow-y:auto;">';
       html += '<div style="margin-bottom:10px;font-size:13px;font-weight:700;color:var(--or);">⚠ SOSTITUZIONE COMPLETA</div>';
-      html += '<div style="color:var(--mut);margin-bottom:8px;">Verranno <strong style="color:var(--red)">cancellati '+ordiniAttuali+' ordini esistenti</strong> e ricreati dal foglio "<strong>'+esc(sheetName)+'</strong>".</div>';
+      html += '<div style="color:var(--mut);margin-bottom:8px;">Foglio: <strong style="color:var(--txt)">'+esc(sheetName)+'</strong> — '+dateCols.length+' date × '+(rows.length-2)+' codici</div>';
+      html += '<div style="color:var(--mut);margin-bottom:8px;">Verranno <strong style="color:var(--red)">cancellati '+ordiniAttuali+' ordini esistenti</strong> e ricreati.</div>';
       html += '<div style="border-top:1px solid var(--brd);padding-top:8px;margin-top:8px;">';
       html += '<div style="color:var(--grn);">✓ '+noti.length+' ordini con codice in anagrafica</div>';
       if(Object.keys(codiciSconosciutiUniq).length){
         html += '<div style="color:var(--yel);margin-top:10px;">⚠ '+sconosciuti.length+' ordini con codici NON in anagrafica ('+Object.keys(codiciSconosciutiUniq).length+' codici unici):</div>';
         html += '<div style="margin-top:8px;background:var(--sur2);border:1px solid var(--brd);border-radius:4px;padding:8px;">';
-        Object.keys(codiciSconosciutiUniq).sort().forEach(function(cod, i){
+        Object.keys(codiciSconosciutiUniq).sort().forEach(function(cod){
           var occ = codiciSconosciutiUniq[cod];
           html += '<label style="display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;">'
             + '<input type="checkbox" class="ord-imp-new" data-cod="'+esc(cod)+'" checked style="cursor:pointer;">'
