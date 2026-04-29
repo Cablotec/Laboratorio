@@ -2235,7 +2235,7 @@ async function ddtAnalizza(file){
           content:[
             { type: file.type==='application/pdf' ? 'document' : 'image',
               source:{ type:'base64', media_type:file.type, data:base64 } },
-            { type:'text', text:'Analizza questo DDT italiano. Estrai codice articolo e quantità.\n\nREGOLE CRITICHE PER IL CODICE:\n- Trascrivi il codice articolo CARATTERE PER CARATTERE, ESATTAMENTE come appare nel documento.\n- NON rimuovere zeri (anche se sembrano "iniziali" all\'interno del codice, es. "MOTR11027E8AE19HAX" non è "MOTR1102E8AE19HAX").\n- NON interpretare numeri come decimali: i codici sono stringhe alfanumeriche opache.\n- NON normalizzare, NON correggere, NON accorpare cifre.\n- Conta le cifre due volte se necessario per essere sicuro.\n\nQUANTITÀ:\n- Le quantità hanno la virgola come separatore decimale italiano (10,000 significa 10 pezzi).\n- Restituisci la quantità ESATTAMENTE come appare nel documento, come stringa.\n\nIgnora seriali, descrizioni, prezzi. Rispondi SOLO con JSON: {"data":"YYYY-MM-DD","tipo":"entrata o uscita","articoli":[{"codice":"XXX","quantita":"10,000"}]}' }
+            { type:'text', text:'Analizza questo DDT italiano. Estrai codice articolo, quantità, e i nomi di mittente e destinatario.\n\nREGOLE CRITICHE PER IL CODICE:\n- Trascrivi il codice articolo CARATTERE PER CARATTERE, ESATTAMENTE come appare nel documento.\n- NON rimuovere zeri (anche se sembrano "iniziali" all\'interno del codice, es. "MOTR11027E8AE19HAX" non è "MOTR1102E8AE19HAX").\n- NON interpretare numeri come decimali: i codici sono stringhe alfanumeriche opache.\n- NON normalizzare, NON correggere, NON accorpare cifre.\n- Conta le cifre due volte se necessario per essere sicuro.\n\nQUANTITÀ:\n- Le quantità hanno la virgola come separatore decimale italiano (10,000 significa 10 pezzi).\n- Restituisci la quantità ESATTAMENTE come appare nel documento, come stringa.\n\nMITTENTE / DESTINATARIO:\n- "mittente": ragione sociale di chi spedisce (es. "Cedente/Prestatore", "Mittente", "Da:").\n- "destinatario": ragione sociale di chi riceve (es. "Destinatario", "Cessionario/Committente", "A:", "Spett.le").\n- Restituisci solo il nome principale, senza forme societarie ridondanti se possibile (es. "Bellini" basta, non serve "Bellini S.r.l.").\n\nIgnora seriali, descrizioni, prezzi. Rispondi SOLO con JSON: {"data":"YYYY-MM-DD","tipo":"entrata o uscita","mittente":"NOME","destinatario":"NOME","articoli":[{"codice":"XXX","quantita":"10,000"}]}' }
           ]
         }]
       })
@@ -2255,7 +2255,28 @@ async function ddtAnalizza(file){
     });
     var parsed = JSON.parse(jsonStr);
     ddtData = parsed.data || new Date().toISOString().substring(0,10);
-    ddtTipo = parsed.tipo === 'uscita' ? 'out' : 'in';
+
+    // Default: tipo dedotto dall'AI
+    var tipoAI = parsed.tipo === 'uscita' ? 'out' : 'in';
+    ddtTipo = tipoAI;
+
+    // Override basato su mittente/destinatario:
+    // - Bellini come MITTENTE → entrata (Bellini ci spedisce)
+    // - Cablotec come DESTINATARIO → uscita (spediamo a Cablotec)
+    var mittente = (parsed.mittente || '').toLowerCase();
+    var destinatario = (parsed.destinatario || '').toLowerCase();
+    var tipoSource = 'AI'; // per messaggio di stato
+    if(mittente.indexOf('bellini') >= 0){
+      ddtTipo = 'in'; tipoSource = 'Bellini→entrata';
+    } else if(destinatario.indexOf('cablotec') >= 0){
+      ddtTipo = 'out'; tipoSource = 'Cablotec→uscita';
+    } else if(destinatario.indexOf('bellini') >= 0){
+      // Bellini come destinatario → uscita verso Bellini (raro, ma copriamo)
+      ddtTipo = 'out'; tipoSource = 'Bellini dest.→uscita';
+    } else if(mittente.indexOf('cablotec') >= 0){
+      // Cablotec come mittente → entrata da Cablotec (raro)
+      ddtTipo = 'in'; tipoSource = 'Cablotec mitt.→entrata';
+    }
     ddtArticoli = (parsed.articoli||[]).map(function(a){
       // Parsing robusto quantità: gestisce sia "10,000" (it) che "10.000" (it) che 10000
       var qtyRaw = a.quantita;
@@ -2305,11 +2326,11 @@ async function ddtAnalizza(file){
     var sconosciuti = ddtArticoli.filter(function(r){
       return r.codice && !S.codici.find(function(c){ return c.codice.toLowerCase()===r.codice.toLowerCase(); });
     }).length;
-    if(sconosciuti > 0){
-      ddtStatus('✅ '+ddtArticoli.length+' articoli estratti — ⚠️ '+sconosciuti+' codice/i non in anagrafica', 'success');
-    } else {
-      ddtStatus('✅ '+ddtArticoli.length+' articoli estratti', 'success');
-    }
+    var tipoLbl = ddtTipo === 'out' ? 'USCITA' : 'ENTRATA';
+    var tipoInfo = (tipoSource === 'AI') ? '' : ' ['+tipoSource+']';
+    var msg = '✅ '+ddtArticoli.length+' articoli — '+tipoLbl+tipoInfo;
+    if(sconosciuti > 0) msg += ' — ⚠️ '+sconosciuti+' codice/i non in anagrafica';
+    ddtStatus(msg, 'success');
   } catch(e){
     ddtStatus('❌ Errore: '+e.message, 'error');
     ddtFileHash = null;
