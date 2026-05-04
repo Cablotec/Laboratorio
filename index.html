@@ -1940,8 +1940,10 @@ async function autoSave(retryCount){
     return;
   }
   saveInFlight = true;
-  // Snapshot dei dati attuali, così le modifiche fatte durante il save non vengono perse
+  // Snapshot dei dati attuali, così le modifiche fatte durante il save non vengono perse.
+  // contentBefore: stringa del solo contenuto (senza savedAt) per confronto post-save
   var snapshot = serialize();
+  var contentBefore = serializeContent();
   document.getElementById('savdot').className='savdot unsaved';
   document.getElementById('savlbl').textContent='Salvataggio…';
 
@@ -1956,9 +1958,8 @@ async function autoSave(retryCount){
       saveInFlight = false;
       // Aggiorna mirror locale solo dopo conferma server
       try { localStorage.setItem(LS, JSON.stringify(snapshot)); } catch(e){}
-      // Se nel frattempo è arrivata altra modifica, rilancia il salvataggio
-      var newSnapshot = serialize();
-      if(JSON.stringify(newSnapshot) !== JSON.stringify(snapshot)){
+      // Se nel frattempo è arrivata altra modifica REALE (contenuto diverso), rilancia il salvataggio
+      if(serializeContent() !== contentBefore){
         autoSave(0);
         return;
       }
@@ -2360,6 +2361,10 @@ async function tryRestore(){
 
 function serialize(){
   return {v:2, savedAt:new Date().toISOString(), nextId:nextId, codici:S.codici, movimenti:S.movimenti, ordini:S.ordini, matricole:S.matricole};
+}
+// Versione senza savedAt per confronti di diff (usata in autoSave per evitare falsi positivi)
+function serializeContent(){
+  return JSON.stringify({v:2, nextId:nextId, codici:S.codici, movimenti:S.movimenti, ordini:S.ordini, matricole:S.matricole});
 }
 function loadObj(o){
   if(!o || (o.v!==1 && o.v!==2)) throw new Error('Formato non compatibile');
