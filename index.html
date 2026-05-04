@@ -126,6 +126,20 @@ table.rt tbody tr:hover td{background:rgba(255,255,255,.02);}
 
 /* Save bar */
 #savebar{position:fixed;bottom:0;left:0;right:0;background:var(--sur);border-top:1px solid var(--brd);padding:8px 16px;z-index:200;display:flex;align-items:center;gap:8px;}
+
+/* Stato read-only (lock attivo da altro utente o tab in background) */
+body.locked-readonly .btnp,
+body.locked-readonly .btnd,
+body.locked-readonly .btnrient,
+body.locked-readonly .bimp,
+body.locked-readonly input.search ~ button,
+body.locked-readonly .btng:not([onclick*="switchTab"]):not([onclick*="doLogout"]):not([onclick*="exportC"]):not([onclick*="exportJ"]):not([onclick*="manualTakeover"]){
+  opacity:.35;pointer-events:none;
+}
+body.locked-readonly #ddt-dropzone{opacity:.35;pointer-events:none;}
+body.locked-readonly #ddt-tipo-selector,
+body.locked-readonly #ddt-table-wrap{opacity:.35;pointer-events:none;}
+body.locked-readonly #ord-import-file{pointer-events:none;}
 .savi{display:flex;align-items:center;gap:6px;font-family:'DM Mono',monospace;font-size:11px;color:var(--mut);flex:1;}
 .savdot{width:6px;height:6px;border-radius:50%;background:var(--mut);flex-shrink:0;transition:background .3s;}
 .savdot.saved{background:var(--grn);}
@@ -470,6 +484,24 @@ var sortState = {codici: {col: null, dir: 'asc'}, movimenti: {col: null, dir: 'a
 
 function uid(){ return nextId++; }
 function fmtD(iso){ if(!iso) return ''; var d=new Date(iso); return d.toLocaleDateString('it-IT'); }
+function fmtDT(iso){
+  if(!iso) return '';
+  // Se è solo data (YYYY-MM-DD), mostra solo la data
+  if(iso.length === 10) return new Date(iso).toLocaleDateString('it-IT');
+  var d = new Date(iso);
+  return d.toLocaleDateString('it-IT')+' '+d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+}
+// ISO locale (no UTC shift) per <input type="datetime-local">
+function nowLocalISO(){
+  var d = new Date();
+  var off = d.getTimezoneOffset()*60000;
+  return new Date(d.getTime()-off).toISOString().substring(0,16);
+}
+// Normalizza data/datetime per confronti FIFO: se è solo data aggiunge T00:00
+function normDateTime(d){
+  if(!d) return '';
+  return d.length === 10 ? d+'T00:00' : d;
+}
 function fmtT(d){ return d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}); }
 function esc(s){ var div=document.createElement('div'); div.textContent=s; return div.innerHTML; }
 
@@ -748,7 +780,7 @@ function renderMovimenti(){
     }
     
     return '<tr class="'+rowClass+'">'+
-      '<td><span class="cell mono">'+fmtD(m.data)+'</span></td>'+
+      '<td><span class="cell mono">'+fmtDT(m.data)+'</span></td>'+
       '<td><span class="cell tc">'+tipoLbl+'</span></td>'+
       '<td><span class="cell cod-cell">'+esc(cod)+'</span></td>'+
       '<td><span class="cell">'+esc(desc)+'</span></td>'+
@@ -792,7 +824,7 @@ function addMovimento(){
       '<button class="tbtn" onclick="setMovTipo(\'riparazione\')">Riparazione</button>'+
     '</div>'+
     '<input type="hidden" id="m-tipo" value="in">'+
-    '<div class="field"><label>Data</label><input type="date" id="m-data" value="'+new Date().toISOString().substring(0,10)+'"></div>'+
+    '<div class="field"><label>Data e ora</label><input type="datetime-local" id="m-data" value="'+nowLocalISO()+'"></div>'+
     '<div class="frow">'+
       '<div class="field"><label>Codice Articolo</label>'+codiceAcField('m-codid',null,'updateFifoPreview')+'</div>'+
       '<div class="field"><label>Quantità</label><input type="number" id="m-qty" value="1" min="1" onchange="updateFifoPreview()"></div>'+
@@ -824,7 +856,7 @@ function editMovimento(id){
       '<button class="tbtn '+tipoClass3+'" onclick="setMovTipo(\'riparazione\')">Riparazione</button>'+
     '</div>'+
     '<input type="hidden" id="m-tipo" value="'+m.tipo+'">'+
-    '<div class="field"><label>Data</label><input type="date" id="m-data" value="'+m.data+'"></div>'+
+    '<div class="field"><label>Data e ora</label><input type="datetime-local" id="m-data" value="'+normDateTime(m.data)+'"></div>'+
     '<div class="frow">'+
       '<div class="field"><label>Codice Articolo</label>'+codiceAcField('m-codid',m.codId,'updateFifoPreview')+'</div>'+
       '<div class="field"><label>Quantità</label><input type="number" id="m-qty" value="'+m.qty+'" min="1" onchange="updateFifoPreview()"></div>'+
@@ -1810,6 +1842,10 @@ var userRole = null; // 'admin' o 'viewer'
 var saveTimer = null;
 var heartbeatTimer = null;
 var LOCK_TTL = 30000; // 30 secondi
+var LS_PENDING = LS + '_pending'; // backup di emergenza per modifiche non confermate dal server
+var pendingChanges = false; // true se ci sono modifiche non ancora confermate
+var saveInFlight = false;   // true durante una richiesta di salvataggio in corso
+var sessionActive = false;  // true dopo tryRestore riuscito (login + connessione)
 
 function initSupabase(){
   try {
@@ -1822,47 +1858,227 @@ function setReadOnly(val, msg){
   isReadOnly = val;
   var bar = document.getElementById('savebar');
   if(val){
+    document.body.classList.add('locked-readonly');
     bar.style.background = 'rgba(255,107,53,.15)';
     bar.style.borderTopColor = 'var(--or)';
     document.getElementById('savdot').className = 'savdot';
     document.getElementById('savdot').style.background = 'var(--or)';
     document.getElementById('savlbl').textContent = msg || '🔒 Sola lettura';
+    // Mostra pulsante "Prendi controllo" se non è viewer permanente
+    if(userRole !== 'viewer') showTakeoverBtn();
   } else {
+    document.body.classList.remove('locked-readonly');
     bar.style.background = '';
     bar.style.borderTopColor = '';
     document.getElementById('savdot').style.background = '';
+    hideTakeoverBtn();
   }
+}
+
+function showTakeoverBtn(){
+  if(document.getElementById('takeover-btn')) return;
+  var btn = document.createElement('button');
+  btn.id = 'takeover-btn';
+  btn.className = 'bexp2';
+  btn.style.cssText = 'background:var(--or);color:#fff;margin-right:6px;';
+  btn.textContent = '🔓 Prendi controllo';
+  btn.onclick = manualTakeover;
+  var savebar = document.getElementById('savebar');
+  // Inserisci prima del bottone Esporta JSON
+  var expBtn = savebar.querySelector('.bexp2');
+  if(expBtn) savebar.insertBefore(btn, expBtn);
+  else savebar.appendChild(btn);
+}
+
+function hideTakeoverBtn(){
+  var btn = document.getElementById('takeover-btn');
+  if(btn) btn.remove();
+}
+
+async function manualTakeover(){
+  if(!supa) return;
+  var ok = confirm('Vuoi prendere il controllo? Se un altro utente sta modificando, le sue modifiche non salvate verranno mantenute (sono già sul server). Da questo momento sarai tu a poter modificare.');
+  if(!ok) return;
+  // Forza acquisizione lock (sovrascrive comunque)
+  await supa.from('magazzino').update({locked_by: myUserId, lock_ts: Date.now()}).eq('id','main');
+  // Ricarica dati freschi prima di abilitare modifiche
+  await reloadFromServer();
+  setReadOnly(false);
+  document.getElementById('savlbl').textContent='Controllo acquisito — '+fmtT(new Date());
+  startHeartbeat();
+}
+
+async function reloadFromServer(){
+  if(!supa || !sessionActive) return;
+  try {
+    var res = await supa.from('magazzino').select('data,updated_at').eq('id','main').single();
+    if(res.data && res.data.data && res.data.data.v){
+      loadObj(res.data.data);
+      try { localStorage.setItem(LS, JSON.stringify(res.data.data)); } catch(e){}
+      renderCodici(); renderMovimenti(); renderOrdini(); matRender();
+    }
+  } catch(e){ console.error('reloadFromServer:', e); }
 }
 
 function markUnsaved(){
   if(isReadOnly) return;
+  pendingChanges = true;
   document.getElementById('savdot').className='savdot unsaved';
   document.getElementById('savlbl').textContent='Modifiche non salvate';
+  // Backup IMMEDIATO su localStorage: se il browser chiude prima dell'autosave, i dati ci sono.
+  try { localStorage.setItem(LS_PENDING, JSON.stringify(serialize())); } catch(e){}
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(autoSave, 1500);
+  saveTimer = setTimeout(autoSave, 600);
 }
 
-async function autoSave(){
+async function autoSave(retryCount){
   if(isReadOnly) return;
+  retryCount = retryCount || 0;
+  if(saveInFlight){
+    // Salvataggio già in corso: riprova quando finisce
+    saveTimer = setTimeout(function(){ autoSave(0); }, 300);
+    return;
+  }
+  saveInFlight = true;
+  // Snapshot dei dati attuali, così le modifiche fatte durante il save non vengono perse
+  var snapshot = serialize();
+  document.getElementById('savdot').className='savdot unsaved';
+  document.getElementById('savlbl').textContent='Salvataggio…';
+
   if(supa){
     try{
-      await supa.from('magazzino').update({
-        data: serialize(),
+      var res = await supa.from('magazzino').update({
+        data: snapshot,
         updated_at: new Date().toISOString()
       }).eq('id','main');
+      if(res.error) throw res.error;
+      // SALVATAGGIO CONFERMATO dal server
+      saveInFlight = false;
+      // Aggiorna mirror locale solo dopo conferma server
+      try { localStorage.setItem(LS, JSON.stringify(snapshot)); } catch(e){}
+      // Se nel frattempo è arrivata altra modifica, rilancia il salvataggio
+      var newSnapshot = serialize();
+      if(JSON.stringify(newSnapshot) !== JSON.stringify(snapshot)){
+        autoSave(0);
+        return;
+      }
+      // Tutto sincronizzato: rimuovi backup pendente
+      try { localStorage.removeItem(LS_PENDING); } catch(e){}
+      pendingChanges = false;
       document.getElementById('savdot').className='savdot saved';
       document.getElementById('savlbl').textContent='Salvato — '+fmtT(new Date());
     } catch(e){
-      document.getElementById('savlbl').textContent='Errore salvataggio';
+      saveInFlight = false;
+      console.error('[autoSave] errore tentativo '+(retryCount+1)+':', e);
+      if(retryCount < 4){
+        // Retry con backoff: 1s, 2s, 4s, 8s
+        var delay = 1000 * Math.pow(2, retryCount);
+        document.getElementById('savdot').className='savdot unsaved';
+        document.getElementById('savlbl').textContent='Errore — riprovo tra '+(delay/1000)+'s ('+(retryCount+1)+'/5)';
+        setTimeout(function(){ autoSave(retryCount+1); }, delay);
+      } else {
+        // Tutti i retry falliti: backup è in LS_PENDING, segnala chiaramente
+        document.getElementById('savdot').className='savdot unsaved';
+        document.getElementById('savlbl').textContent='⚠ NON salvato sul server (backup locale OK) — controlla la connessione';
+      }
     }
   } else {
+    // Solo localStorage (no Supabase)
     try{
-      localStorage.setItem(LS, JSON.stringify(serialize()));
+      localStorage.setItem(LS, JSON.stringify(snapshot));
+      try { localStorage.removeItem(LS_PENDING); } catch(e){}
+      saveInFlight = false;
+      pendingChanges = false;
       document.getElementById('savdot').className='savdot saved';
-      document.getElementById('savlbl').textContent='Salvato — '+fmtT(new Date());
-    } catch(e){}
+      document.getElementById('savlbl').textContent='Salvato (locale) — '+fmtT(new Date());
+    } catch(e){ saveInFlight = false; }
   }
 }
+
+// Avvisa l'utente se chiude la pagina con modifiche non ancora confermate dal server
+window.addEventListener('beforeunload', function(e){
+  if(pendingChanges || saveInFlight){
+    e.preventDefault();
+    e.returnValue = 'Ci sono modifiche non ancora salvate sul server. Sei sicuro di voler chiudere?';
+    return e.returnValue;
+  }
+});
+
+// Quando la pagina viene effettivamente chiusa o navigata via, rilascia il lock.
+// pagehide è più affidabile di unload sui browser moderni (specialmente mobile).
+window.addEventListener('pagehide', function(){
+  if(supa && sessionActive && !isReadOnly && myUserId){
+    // Usa fetch keepalive per garantire che la richiesta vada anche durante la chiusura
+    try {
+      fetch(SUPA_URL+'/rest/v1/magazzino?id=eq.main', {
+        method:'PATCH',
+        headers:{
+          'Content-Type':'application/json',
+          'apikey': SUPA_KEY,
+          'Authorization': 'Bearer '+SUPA_KEY,
+          'Prefer':'return=minimal'
+        },
+        body: JSON.stringify({locked_by: null, lock_ts: 0}),
+        keepalive: true
+      });
+    } catch(e){}
+  }
+});
+
+// OPZIONE 3: tab in background → rilascia lock + read-only
+//            tab in foreground → ricarica dati freschi + ritenta lock
+var visibilityBusy = false;
+document.addEventListener('visibilitychange', async function(){
+  if(!supa || !sessionActive || userRole === 'viewer') return;
+  if(visibilityBusy) return;
+  visibilityBusy = true;
+  try {
+    if(document.hidden){
+    // ─── Tab nascosto ───
+    // Se eravamo editor: salva eventuali pending, rilascia lock, passa in read-only
+    if(!isReadOnly){
+      if(pendingChanges || saveInFlight){
+        // Aspetta che il save in corso completi prima di rilasciare
+        try { await autoSave(0); } catch(e){}
+      }
+      clearInterval(heartbeatTimer);
+      try { await releaseLock(); } catch(e){}
+      setReadOnly(true, '🔒 Scheda in background — read-only');
+    }
+  } else {
+    // ─── Tab tornato visibile ───
+    // Ricarica SEMPRE i dati freschi dal server, poi ritenta il lock
+    document.getElementById('savlbl').textContent='Sincronizzazione…';
+    await reloadFromServer();
+    // Verifica stato lock attuale
+    try {
+      var res = await supa.from('magazzino').select('locked_by,lock_ts,updated_at').eq('id','main').single();
+      var lockedBy = res.data && res.data.locked_by;
+      var lockTs = res.data && res.data.lock_ts || 0;
+      var lockLive = lockedBy && lockedBy !== myUserId && (Date.now() - lockTs) < LOCK_TTL;
+
+      if(lockLive){
+        setReadOnly(true, '🔒 Un altro utente sta modificando — attesa rilascio…');
+        startReadonlyPoller();
+      } else {
+        var ok = await acquireLock();
+        if(ok){
+          setReadOnly(false);
+          startHeartbeat();
+          var sv = res.data && res.data.updated_at ? new Date(res.data.updated_at) : new Date();
+          document.getElementById('savdot').className='savdot saved';
+          document.getElementById('savlbl').textContent='Connesso — '+fmtT(sv);
+        } else {
+          setReadOnly(true, '🔒 Un altro utente è entrato — attesa rilascio…');
+          startReadonlyPoller();
+        }
+      }
+    } catch(e){ console.error('visibilitychange:', e); }
+    }
+  } finally {
+    visibilityBusy = false;
+  }
+});
 
 async function acquireLock(){
   var now = Date.now();
@@ -1921,11 +2137,17 @@ function startRealtime(){
       filter: 'id=eq.main'
     }, function(payload){
       var newData = payload.new;
-      // Aggiorna lock status
       var age = Date.now() - (newData.lock_ts||0);
       var lockAttivo = newData.locked_by && newData.locked_by !== myUserId && age < LOCK_TTL;
       if(!isReadOnly && lockAttivo){
-        // Qualcuno ha preso il lock mentre eravamo connessi (raro)
+        // Qualcun altro ha preso il controllo (forced takeover): passiamo in read-only
+        clearInterval(heartbeatTimer);
+        // Carica anche i dati freschi che ha appena scritto
+        if(newData.data && newData.data.v){
+          try { loadObj(newData.data); renderCodici(); renderMovimenti(); renderOrdini(); matRender(); } catch(e){}
+        }
+        setReadOnly(true, '🔒 Un altro utente ha preso il controllo — read-only');
+        startReadonlyPoller();
         return;
       }
       if(isReadOnly && !lockAttivo){
@@ -1935,6 +2157,8 @@ function startRealtime(){
             setReadOnly(false);
             startHeartbeat();
             document.getElementById('savlbl').textContent='Connesso — '+fmtT(new Date());
+            // Ricarica dati freschi appena diventiamo editor
+            reloadFromServer();
           }
         });
         return;
@@ -2034,25 +2258,101 @@ async function tryRestore(){
 
   document.getElementById('savlbl').textContent='Connessione in corso...';
   if(!myUserId) myUserId = 'u_'+Math.random().toString(36).substring(2,10);
+  sessionActive = true;
 
   try {
     // Avvia realtime
     startRealtime();
 
-    // Carica dati
-    var res = await supa.from('magazzino').select('data,updated_at').eq('id','main').single();
-    if(res.data && res.data.data && res.data.data.v){
-      loadObj(res.data.data);
-      var sv = new Date(res.data.updated_at);
-      document.getElementById('savdot').className='savdot saved';
-      document.getElementById('savlbl').textContent='Connesso — '+fmtD(sv.toISOString())+' '+fmtT(sv);
+    // Carica dati dal server
+    var res = await supa.from('magazzino').select('data,updated_at,locked_by,lock_ts').eq('id','main').single();
+    var serverData = (res.data && res.data.data && res.data.data.v) ? res.data.data : null;
+    var serverTime = res.data && res.data.updated_at ? new Date(res.data.updated_at).getTime() : 0;
+
+    // Carica e mostra subito i dati (in ogni caso, anche se andremo in read-only)
+    if(serverData){
+      loadObj(serverData);
+      try { localStorage.setItem(LS, JSON.stringify(serverData)); } catch(e){}
       renderCodici(); renderMovimenti(); renderOrdini(); matRender();
     }
+
+    // Se l'utente è viewer permanente, salta tutta la logica del lock (è già read-only)
+    if(userRole === 'viewer'){
+      var sv = new Date(res.data.updated_at);
+      document.getElementById('savlbl').textContent='👁 Visualizzazione — aggiornato '+fmtT(sv);
+      return;
+    }
+
+    // Tenta di acquisire il lock
+    var lockedBy = res.data && res.data.locked_by;
+    var lockTs = res.data && res.data.lock_ts || 0;
+    var lockAge = Date.now() - lockTs;
+    var lockLive = lockedBy && lockedBy !== myUserId && lockAge < LOCK_TTL;
+
+    if(lockLive){
+      // Qualcun altro sta editando — entra in read-only
+      setReadOnly(true, '🔒 Un altro utente sta modificando — attesa rilascio…');
+      startReadonlyPoller();
+      return;
+    }
+
+    // Acquisisci il lock per noi
+    var lockOk = await acquireLock();
+    if(!lockOk){
+      // Race condition: qualcun altro è entrato nello stesso istante
+      setReadOnly(true, '🔒 Un altro utente è entrato — attesa rilascio…');
+      startReadonlyPoller();
+      return;
+    }
+
+    // ✅ Siamo l'editor. Avvia heartbeat.
+    startHeartbeat();
+
+    // Controlla recovery pending (solo ora che abbiamo il lock)
+    var pending = null;
+    try { pending = JSON.parse(localStorage.getItem(LS_PENDING)||'null'); } catch(e){}
+    var pendingTime = (pending && pending.savedAt) ? new Date(pending.savedAt).getTime() : 0;
+
+    if(pending && pendingTime > serverTime + 1000){
+      var diff = Math.round((pendingTime - serverTime)/1000);
+      var ok = confirm(
+        '⚠ RECUPERO MODIFICHE NON SALVATE\n\n' +
+        'Sono state trovate modifiche locali più recenti del server di '+diff+' secondi.\n' +
+        'Probabilmente l\'ultima sessione si è chiusa prima del salvataggio.\n\n' +
+        'OK = Recupera le modifiche locali (verranno ricaricate sul server)\n' +
+        'Annulla = Ignora e usa la versione del server'
+      );
+      if(ok){
+        loadObj(pending);
+        renderCodici(); renderMovimenti(); renderOrdini(); matRender();
+        document.getElementById('savdot').className='savdot unsaved';
+        document.getElementById('savlbl').textContent='Recupero in corso…';
+        pendingChanges = true;
+        autoSave(0);
+        return;
+      } else {
+        try { localStorage.removeItem(LS_PENDING); } catch(e){}
+      }
+    } else if(pending){
+      try { localStorage.removeItem(LS_PENDING); } catch(e){}
+    }
+
+    if(serverData){
+      var sv2 = new Date(res.data.updated_at);
+      document.getElementById('savdot').className='savdot saved';
+      document.getElementById('savlbl').textContent='Connesso — '+fmtD(sv2.toISOString())+' '+fmtT(sv2);
+    }
   } catch(e){
+    console.error('tryRestore error:', e);
     setReadOnly(true, 'Errore connessione — modalità locale');
     try{
-      var o = JSON.parse(localStorage.getItem(LS)||'null');
-      if(o){ loadObj(o); renderCodici(); renderOrdini(); }
+      var pending2 = null;
+      try { pending2 = JSON.parse(localStorage.getItem(LS_PENDING)||'null'); } catch(e2){}
+      var mirror = JSON.parse(localStorage.getItem(LS)||'null');
+      var pTime = pending2 && pending2.savedAt ? new Date(pending2.savedAt).getTime() : 0;
+      var mTime = mirror && mirror.savedAt ? new Date(mirror.savedAt).getTime() : 0;
+      var src = (pTime > mTime) ? pending2 : mirror;
+      if(src){ loadObj(src); renderCodici(); renderMovimenti(); renderOrdini(); matRender(); }
     } catch(e2){}
   }
 }
