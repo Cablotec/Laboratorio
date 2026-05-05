@@ -1642,7 +1642,13 @@ async function ordImportaExcel(file){
           var qty = (typeof val === 'number') ? val : parseFloat(String(val).replace(',','.'));
           if(isNaN(qty) || qty <= 0) continue;
           qty = Math.round(qty);
-          var iso = dateRow[c].toISOString().substring(0,10);
+          // Estrai data come stringa YYYY-MM-DD usando i metodi LOCALI per evitare
+          // shift di un giorno dovuto a conversione UTC (data Excel → mezzanotte UTC →
+          // in fuso italiano la sera prima → toISOString perde un giorno)
+          var dt = dateRow[c];
+          var iso = dt.getFullYear() + '-' +
+                    ('0'+(dt.getMonth()+1)).slice(-2) + '-' +
+                    ('0'+dt.getDate()).slice(-2);
           estratti.push({codice: cod, data: iso, qty: qty});
         }
       }
