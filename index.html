@@ -2732,6 +2732,14 @@ async function ddtImportaMagazzino(){
   // Esegui import
   var errors = [];
   var imported = 0;
+  // Ora attuale al momento dell'import (HH:mm) — viene combinata con la data del DDT
+  // così i movimenti generati dall'estrattore hanno una posizione cronologica precisa
+  // utile per l'ordinamento FIFO.
+  var nowHHMM = (function(){
+    var d = new Date();
+    return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+  })();
+
   ddtArticoli.forEach(function(r, i){
     if(!r.codice){ errors.push('Riga '+(i+1)+': codice mancante'); return; }
     if(!r.qty || r.qty <= 0){ errors.push('Riga '+(i+1)+': quantità non valida'); return; }
@@ -2749,8 +2757,10 @@ async function ddtImportaMagazzino(){
       fifoDetails = allocaFIFO(calcLotti(codice.id), r.qty);
       scalOrdiniPerUscita(codice.id, r.qty);
     }
+    // Combina data DDT (YYYY-MM-DD) con ora attuale (HH:mm) → formato datetime-local
+    var dataMov = (r.data && r.data.length === 10) ? (r.data+'T'+nowHHMM) : r.data;
     S.movimenti.push({
-      id:uid(), tipo:ddtTipo, data:r.data, codId:codice.id, qty:r.qty,
+      id:uid(), tipo:ddtTipo, data:dataMov, codId:codice.id, qty:r.qty,
       sn:'', posizione:'', note:'Da DDT', fifoDetails:fifoDetails, riparazioneRientrata:false
     });
     imported++;
