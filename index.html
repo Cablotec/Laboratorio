@@ -204,6 +204,16 @@ tr.rip-rientrata td{opacity:.55;}
 
 /* ═══ ESTRATTORE DDT ═══ */
 .dropzone{border:2px dashed var(--brd);border-radius:8px;padding:50px 20px;text-align:center;margin-bottom:20px;cursor:pointer;transition:all .3s;background:var(--sur);}
+.dropzone-compact{padding:18px 16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;justify-content:center;flex-wrap:wrap;}
+.dropzone-compact .dz-icon{font-size:26px;margin-bottom:0;opacity:.6;}
+.dropzone-compact .dz-text{font-size:13px;font-weight:600;margin-bottom:0;}
+.dropzone-compact .dz-hint{font-size:10px;}
+.ddt-panel{background:var(--sur);border:1px solid var(--brd);border-radius:8px;padding:14px 16px;margin-bottom:20px;}
+.ddt-panel-hd{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;}
+.ddt-panel-title{font-size:13px;font-weight:700;letter-spacing:.02em;}
+.ddt-panel-sub{font-family:'DM Mono',monospace;font-size:10px;color:var(--mut);}
+.ddt-panel #ddt-fileinfo[style*="display:flex"],
+.ddt-panel #ddt-fileinfo:not([style*="display:none"]){display:flex !important;}
 .dropzone:hover,.dropzone.dragover{border-color:var(--acc);background:rgba(212,255,78,.05);}
 .dropzone.processing{border-color:var(--blu);background:rgba(78,184,255,.05);}
 .dz-icon{font-size:40px;margin-bottom:10px;opacity:.5;}
@@ -253,7 +263,6 @@ tr.rip-rientrata td{opacity:.55;}
   <button class="navtab active" onclick="switchTab('codici')">Codici Articolo</button>
   <button class="navtab" onclick="switchTab('movimenti')">Movimenti</button>
   <button class="navtab" onclick="switchTab('ordini')">Ordini</button>
-  <button class="navtab" onclick="switchTab('ddt')">Estrattore DDT</button>
   <button class="navtab" onclick="switchTab('matricole')">Matricole</button>
 </nav>
 
@@ -287,6 +296,54 @@ tr.rip-rientrata td{opacity:.55;}
 <!-- SEZIONE MOVIMENTI -->
 <!-- ═══════════════════════════════════════════════════════════ -->
 <section id="sec-movimenti" class="sec">
+
+  <!-- ═══ Estrattore DDT integrato ═══ -->
+  <div class="ddt-panel">
+    <div class="ddt-panel-hd">
+      <span class="ddt-panel-title">📄 Estrattore DDT</span>
+      <span class="ddt-panel-sub">Trascina un DDT per importare entrate/uscite</span>
+    </div>
+
+    <div class="dropzone dropzone-compact" id="ddt-dropzone">
+      <div class="dz-icon">📄</div>
+      <div class="dz-text">Trascina qui il DDT</div>
+      <div class="dz-hint">PDF o immagine (JPG, PNG) • Click per selezionare</div>
+      <input type="file" id="ddt-fileinput" accept=".pdf,image/*" style="display:none;">
+    </div>
+
+    <div id="ddt-fileinfo" style="display:none;background:var(--sur);border:1px solid var(--brd);border-radius:6px;padding:10px 14px;margin-bottom:14px;align-items:center;gap:10px;">
+      <span style="font-size:20px;">📎</span>
+      <span id="ddt-filename" style="font-family:'DM Mono',monospace;font-size:12px;flex:1;"></span>
+      <button class="btnd" onclick="ddtClear()">✕ Rimuovi</button>
+    </div>
+
+    <div class="ddt-status" id="ddt-status"></div>
+
+    <div id="ddt-tipo-selector" style="display:none;">
+      <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);margin-bottom:6px;">Tipo Movimento</div>
+      <div class="ddt-tipo">
+        <button id="ddt-btn-in" class="tin" onclick="ddtSetTipo('in')">✓ ENTRATA</button>
+        <button id="ddt-btn-out" onclick="ddtSetTipo('out')">USCITA</button>
+      </div>
+    </div>
+
+    <div id="ddt-table-wrap" style="display:none;">
+      <div class="tw">
+        <table class="rt">
+          <thead><tr>
+            <th>Data</th><th>Codice</th><th>Quantità</th><th style="width:40px;"></th>
+          </tr></thead>
+          <tbody id="ddt-tbody"></tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="btnp" onclick="ddtImportaMagazzino()">⬇ Importa in Magazzino</button>
+        <button class="btng" onclick="ddtAddRow()">+ Riga</button>
+        <button class="btng" onclick="ddtClear()">🔄 Nuovo DDT</button>
+      </div>
+    </div>
+  </div>
+
   <div class="kpis">
     <div class="kpi"><div class="kl">Tot. Movimenti</div><div class="kv" id="kpi-mov-tot">0</div></div>
     <div class="kpi"><div class="kl">Entrate</div><div class="kv kg" id="kpi-mov-in">0</div></div>
@@ -358,53 +415,6 @@ tr.rip-rientrata td{opacity:.55;}
       </thead>
       <tbody id="tbodyOrdini"></tbody>
     </table>
-  </div>
-</section>
-
-
-<!-- ═══════════════════════════════════════════════════════════ -->
-<!-- SEZIONE ESTRATTORE DDT -->
-<!-- ═══════════════════════════════════════════════════════════ -->
-<section id="sec-ddt" class="sec">
-  <div class="toolbar"><h2>Estrattore DDT</h2></div>
-
-  <div class="dropzone" id="ddt-dropzone">
-    <div class="dz-icon">📄</div>
-    <div class="dz-text">Trascina qui il DDT</div>
-    <div class="dz-hint">PDF o immagine (JPG, PNG) • Click per selezionare</div>
-    <input type="file" id="ddt-fileinput" accept=".pdf,image/*" style="display:none;">
-  </div>
-
-  <div class="file-info" id="ddt-fileinfo" style="display:none;background:var(--sur);border:1px solid var(--brd);border-radius:6px;padding:10px 14px;margin-bottom:14px;display:none;align-items:center;gap:10px;">
-    <span style="font-size:20px;">📎</span>
-    <span id="ddt-filename" style="font-family:'DM Mono',monospace;font-size:12px;flex:1;"></span>
-    <button class="btnd" onclick="ddtClear()">✕ Rimuovi</button>
-  </div>
-
-  <div class="ddt-status" id="ddt-status"></div>
-
-  <div id="ddt-tipo-selector" style="display:none;">
-    <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);margin-bottom:6px;">Tipo Movimento</div>
-    <div class="ddt-tipo">
-      <button id="ddt-btn-in" class="tin" onclick="ddtSetTipo('in')">✓ ENTRATA</button>
-      <button id="ddt-btn-out" onclick="ddtSetTipo('out')">USCITA</button>
-    </div>
-  </div>
-
-  <div id="ddt-table-wrap" style="display:none;">
-    <div class="tw">
-      <table class="rt">
-        <thead><tr>
-          <th>Data</th><th>Codice</th><th>Quantità</th><th style="width:40px;"></th>
-        </tr></thead>
-        <tbody id="ddt-tbody"></tbody>
-      </table>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:12px;">
-      <button class="btnp" onclick="ddtImportaMagazzino()">⬇ Importa in Magazzino</button>
-      <button class="btng" onclick="ddtAddRow()">+ Riga</button>
-      <button class="btng" onclick="ddtClear()">🔄 Nuovo DDT</button>
-    </div>
   </div>
 </section>
 
@@ -2802,7 +2812,9 @@ async function ddtImportaMagazzino(){
       }, { onConflict: 'hash' });
     }
     ddtClear();
-    switchTab('movimenti');
+    // Scroll alla tabella movimenti (siamo già nella scheda)
+    var tbl = document.querySelector('#sec-movimenti table.rt');
+    if(tbl) tbl.scrollIntoView({behavior:'smooth', block:'start'});
   }
 }
 
