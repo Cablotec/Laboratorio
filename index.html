@@ -1831,8 +1831,10 @@ function exportCodiciXLSX(){
   var rows = [['Codice', 'Descrizione', 'Giacenza', 'In Riparazione']];
   S.codici.forEach(function(c){
     var giac = calcGiacenza(c.id);
-    if(giac === 0) return;
-    rows.push([c.codice, c.desc||'', giac, calcInRiparazione(c.id)]);
+    var inRip = calcInRiparazione(c.id);
+    // Includi il codice se ha giacenza fisica > 0 OPPURE se ha pezzi in riparazione
+    if(giac === 0 && inRip === 0) return;
+    rows.push([c.codice, c.desc||'', giac, inRip]);
   });
   var ws = XLSX.utils.aoa_to_sheet(rows);
   // Larghezza colonne
@@ -2504,6 +2506,57 @@ async function ddtHashFile(file){
   return hashArray.map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
 }
 
+// Chiama il proxy Anthropic con retry automatico per errori temporanei.
+// Gli errori "Overloaded", 429 (rate limit) e 5xx sono transitori: l'API è
+// momentaneamente sovraccarica, riprovando di solito va a buon fine.
+// Backoff esponenziale: 3s, 6s, 12s, 24s, 30s → copre ondate di sovraccarico
+// che durano anche un paio di minuti.
+async function ddtChiamaConRetry(requestBody){
+  var ATTESE = [3, 6, 12, 24, 30]; // secondi tra un tentativo e il successivo
+  var MAX_TENTATIVI = ATTESE.length + 1; // 6 tentativi totali
+  var ultimoErrore = null;
+  for(var tentativo = 1; tentativo <= MAX_TENTATIVI; tentativo++){
+    try {
+      var resp = await fetch('https://qshiwixlyrtzkdbzvkyh.supabase.co/functions/v1/anthropic-proxy', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY},
+        body: requestBody
+      });
+      var data = await resp.json();
+
+      // Risposta valida con contenuto → ritorna subito
+      if(data.content && data.content[0]) return data;
+
+      // Errore: capisci se è temporaneo
+      var errMsg = data.error ? (data.error.message || '') : '';
+      var errType = data.error ? (data.error.type || '') : '';
+      var temporaneo = /overload|rate.?limit|timeout|try again|capacity|529|503|502|500/i.test(errMsg+' '+errType+' '+resp.status);
+
+      if(temporaneo && tentativo < MAX_TENTATIVI){
+        ultimoErrore = errMsg || ('HTTP '+resp.status);
+        var attesa = ATTESE[tentativo-1];
+        ddtStatus('⏳ Server Anthropic occupato — nuovo tentativo tra '+attesa+'s ('+tentativo+'/'+(MAX_TENTATIVI-1)+')', 'processing');
+        await new Promise(function(r){ setTimeout(r, attesa*1000); });
+        continue;
+      }
+      // Errore non temporaneo, oppure tentativi esauriti
+      return data;
+    } catch(netErr){
+      // Errore di rete (connessione persa, ecc.) — anche questo temporaneo
+      ultimoErrore = netErr.message;
+      if(tentativo < MAX_TENTATIVI){
+        var attesa2 = ATTESE[tentativo-1];
+        ddtStatus('⏳ Errore di rete — nuovo tentativo tra '+attesa2+'s ('+tentativo+'/'+(MAX_TENTATIVI-1)+')', 'processing');
+        await new Promise(function(r){ setTimeout(r, attesa2*1000); });
+        continue;
+      }
+      throw new Error('Connessione fallita dopo '+MAX_TENTATIVI+' tentativi: '+ultimoErrore);
+    }
+  }
+  // Tentativi esauriti su errore temporaneo
+  throw new Error('Server Anthropic sovraccarico — riprovati '+MAX_TENTATIVI+' tentativi in oltre 1 minuto senza successo. Riprova tra qualche minuto. (Ultimo errore: '+ultimoErrore+')');
+}
+
 async function ddtAnalizza(file){
   ddtFile = file;
   ddtStatus('🔄 Controllo duplicato...', 'processing');
@@ -2545,23 +2598,21 @@ async function ddtAnalizza(file){
       } catch(e){ ddtPdfText = ''; }
     }
     var base64 = await ddtToBase64(file);
-    var resp = await fetch('https://qshiwixlyrtzkdbzvkyh.supabase.co/functions/v1/anthropic-proxy', {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPA_KEY},
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 8192,
-        messages:[{
-          role:'user',
-          content:[
-            { type: file.type==='application/pdf' ? 'document' : 'image',
-              source:{ type:'base64', media_type:file.type, data:base64 } },
-            { type:'text', text:'Analizza questo DDT italiano. Estrai codice articolo e quantità.\n\nREGOLE CRITICHE PER IL CODICE:\n- Trascrivi il codice articolo CARATTERE PER CARATTERE, ESATTAMENTE come appare nel documento.\n- NON rimuovere zeri (anche se sembrano "iniziali" all\'interno del codice, es. "MOTR11027E8AE19HAX" non è "MOTR1102E8AE19HAX").\n- NON interpretare numeri come decimali: i codici sono stringhe alfanumeriche opache.\n- NON normalizzare, NON correggere, NON accorpare cifre.\n- Conta le cifre due volte se necessario per essere sicuro.\n\nQUANTITÀ:\n- Le quantità hanno la virgola come separatore decimale italiano (10,000 significa 10 pezzi).\n- Restituisci la quantità ESATTAMENTE come appare nel documento, come stringa.\n\nIgnora seriali, descrizioni, prezzi. Rispondi SOLO con JSON: {"data":"YYYY-MM-DD","articoli":[{"codice":"XXX","quantita":"10,000"}]}' }
-          ]
-        }]
-      })
+    var requestBody = JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
+      messages:[{
+        role:'user',
+        content:[
+          { type: file.type==='application/pdf' ? 'document' : 'image',
+            source:{ type:'base64', media_type:file.type, data:base64 } },
+          { type:'text', text:'Analizza questo DDT italiano. Estrai codice articolo e quantità.\n\nREGOLE CRITICHE PER IL CODICE:\n- Trascrivi il codice articolo CARATTERE PER CARATTERE, ESATTAMENTE come appare nel documento.\n- NON rimuovere zeri (anche se sembrano "iniziali" all\'interno del codice, es. "MOTR11027E8AE19HAX" non è "MOTR1102E8AE19HAX").\n- NON interpretare numeri come decimali: i codici sono stringhe alfanumeriche opache.\n- NON normalizzare, NON correggere, NON accorpare cifre.\n- Conta le cifre due volte se necessario per essere sicuro.\n\nQUANTITÀ:\n- Le quantità hanno la virgola come separatore decimale italiano (10,000 significa 10 pezzi).\n- Restituisci la quantità ESATTAMENTE come appare nel documento, come stringa.\n\nIgnora seriali, descrizioni, prezzi. Rispondi SOLO con JSON: {"data":"YYYY-MM-DD","articoli":[{"codice":"XXX","quantita":"10,000"}]}' }
+        ]
+      }]
     });
-    var data = await resp.json();
+
+    // Chiamata con retry automatico per errori temporanei (Overloaded, rete, 429, 5xx)
+    var data = await ddtChiamaConRetry(requestBody);
     if(!data.content || !data.content[0]) throw new Error('Risposta non valida: '+(data.error ? data.error.message : JSON.stringify(data)));
     var text = data.content[0].text;
     // Rimuovi backtick markdown e cerca il JSON
