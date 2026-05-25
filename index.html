@@ -658,7 +658,7 @@ function editCodice(id){
   openModal();
 }
 
-function saveCodice(id){
+async function saveCodice(id){
   var cod = (document.getElementById('c-cod').value||'').trim();
   var desc = (document.getElementById('c-desc').value||'').trim();
   if(!cod){ alert('Inserisci il codice articolo'); return; }
@@ -669,26 +669,43 @@ function saveCodice(id){
   });
   if(duplicato){ alert('Codice "'+cod+'" già esistente'); return; }
 
-  if(id){
-    var c = S.codici.find(function(x){ return x.id===id; });
-    if(c){ c.codice=cod; c.desc=desc; c.um='pz'; }
-  } else {
-    S.codici.push({id:uid(), codice:cod, desc:desc, um:'pz'});
+  try {
+    if(id){
+      var c = S.codici.find(function(x){ return x.id===id; });
+      if(c){
+        c.codice = cod; c.desc = desc; c.um = 'pz';
+        await dbUpdate('codici', id, codiceToDb(c));
+      }
+    } else {
+      var newId = await nextDbId();
+      var nuovo = {id:newId, codice:cod, desc:desc, um:'pz'};
+      S.codici.push(nuovo);
+      await dbInsert('codici', codiceToDb(nuovo));
+    }
+    closeModal();
+    renderCodici();
+  } catch(err){
+    alert('Errore salvataggio: '+err.message);
+    console.error(err);
   }
-  closeModal();
-  renderCodici();
-  markUnsaved();
 }
 
 function delCodice(id){
-  ask('Eliminare questo codice?\nVerranno eliminati anche i movimenti e ordini collegati.', 'Elimina', function(){
-    S.codici = S.codici.filter(function(c){ return c.id!==id; });
-    S.movimenti = S.movimenti.filter(function(m){ return m.codId!==id; });
-    S.ordini = S.ordini.filter(function(o){ return o.codId!==id; });
-    renderCodici();
-    renderMovimenti();
-    renderOrdini();
-    markUnsaved();
+  ask('Eliminare questo codice?\nVerranno eliminati anche i movimenti e ordini collegati.', 'Elimina', async function(){
+    try {
+      // Cascade lato DB: ON DELETE CASCADE rimuove movimenti e ordini collegati
+      await dbDelete('codici', id);
+      // Aggiorna stato locale
+      S.codici = S.codici.filter(function(c){ return c.id!==id; });
+      S.movimenti = S.movimenti.filter(function(m){ return m.codId!==id; });
+      S.ordini = S.ordini.filter(function(o){ return o.codId!==id; });
+      renderCodici();
+      renderMovimenti();
+      renderOrdini();
+    } catch(err){
+      alert('Errore eliminazione: '+err.message);
+      console.error(err);
+    }
   });
 }
 
@@ -1101,7 +1118,7 @@ function scalOrdiniPerUscita(codId, qty){
 }
 
 
-function saveMovimento(id){
+async function saveMovimento(id){
   var tipo = document.getElementById('m-tipo').value;
   var data = document.getElementById('m-data').value;
   var codId = parseInt(document.getElementById('m-codid').value);
@@ -1109,59 +1126,79 @@ function saveMovimento(id){
   var sn = (document.getElementById('m-sn').value||'').trim();
   var posizione = (document.getElementById('m-pos').value||'').trim();
   var note = (document.getElementById('m-note').value||'').trim();
-  
+
   if(!data){ alert('Inserisci la data'); return; }
   if(!codId){ alert('Seleziona un codice articolo'); return; }
   if(qty <= 0){ alert('Quantità deve essere > 0'); return; }
-  
+
   // Validazione riparazione
   if(tipo === 'riparazione'){
     if(!sn){ alert('Serial Number obbligatorio per le riparazioni'); return; }
     if(!posizione){ alert('Posizione obbligatoria per le riparazioni'); return; }
     if(qty !== 1){ alert('Le riparazioni devono avere quantità = 1'); qty = 1; }
   }
-  
+
   if(tipo === 'out' || tipo === 'riparazione'){
     var giac = calcGiacenza(codId);
     if(giac < qty){ alert('Giacenza insufficiente: disponibili '+giac+' pz'); return; }
   }
-  
+
   var fifoDetails = null;
   if(tipo === 'out'){
     var lotti = calcLotti(codId);
     fifoDetails = allocaFIFO(lotti, qty);
   }
 
-  if(id){
-    var m = S.movimenti.find(function(x){ return x.id===id; });
-    if(m){
-      m.tipo=tipo; m.data=data; m.codId=codId; m.qty=qty;
-      m.sn=sn; m.posizione=posizione; m.note=note; m.fifoDetails=fifoDetails;
+  try {
+    if(id){
+      var m = S.movimenti.find(function(x){ return x.id===id; });
+      if(m){
+        m.tipo=tipo; m.data=data; m.codId=codId; m.qty=qty;
+        m.sn=sn; m.posizione=posizione; m.note=note; m.fifoDetails=fifoDetails;
+        await dbUpdate('movimenti', id, movimentoToDb(m));
+      }
+    } else {
+      // Crea movimento
+      var newId = await nextDbId();
+      var nuovo = {
+        id:newId, tipo:tipo, data:data, codId:codId, qty:qty,
+        sn:sn, posizione:posizione, note:note, fifoDetails:fifoDetails,
+        riparazioneRientrata: false
+      };
+      S.movimenti.push(nuovo);
+      await dbInsert('movimenti', movimentoToDb(nuovo));
+      // Scala ordini aperti FIFO solo alla creazione di un'uscita
+      if(tipo === 'out'){
+        var log = scalOrdiniPerUscita(codId, qty);
+        // Propaga update dei qty_res sul DB
+        for(var i=0; i<log.length; i++){
+          var o = S.ordini.find(function(x){ return x.id === log[i].ordId; });
+          if(o) await dbUpdate('ordini', o.id, {qty_res: o.qtyRes});
+        }
+      }
     }
-  } else {
-    // Scala ordini aperti FIFO solo alla creazione
-    if(tipo === 'out') scalOrdiniPerUscita(codId, qty);
-    S.movimenti.push({
-      id:uid(), tipo:tipo, data:data, codId:codId, qty:qty,
-      sn:sn, posizione:posizione, note:note, fifoDetails:fifoDetails,
-      riparazioneRientrata: false
-    });
+    closeModal();
+    renderMovimenti();
+    renderCodici();
+    updateOrdiniResidui();
+  } catch(err){
+    alert('Errore salvataggio movimento: '+err.message);
+    console.error(err);
   }
-  
-  closeModal();
-  renderMovimenti();
-  renderCodici();
-  updateOrdiniResidui();
-  markUnsaved();
 }
 
 function delMovimento(id){
-  ask('Eliminare questo movimento?', 'Elimina', function(){
-    S.movimenti = S.movimenti.filter(function(m){ return m.id!==id; });
-    renderMovimenti();
-    renderCodici();
-    renderOrdini();
-    markUnsaved();
+  ask('Eliminare questo movimento?', 'Elimina', async function(){
+    try {
+      await dbDelete('movimenti', id);
+      S.movimenti = S.movimenti.filter(function(m){ return m.id!==id; });
+      renderMovimenti();
+      renderCodici();
+      renderOrdini();
+    } catch(err){
+      alert('Errore eliminazione: '+err.message);
+      console.error(err);
+    }
   });
 }
 
@@ -1171,13 +1208,18 @@ function rientroRiparazione(id){
     alert('Movimento non valido per il rientro');
     return;
   }
-  
-  ask('Confermi il rientro dalla riparazione?\nQuantità: '+m.qty+' pz\nSN: '+(m.sn||'—'), 'Conferma Rientro', function(){
-    S.movimenti = S.movimenti.filter(function(x){ return x.id !== id; });
-    renderMovimenti();
-    renderCodici();
-    renderOrdini();
-    markUnsaved();
+
+  ask('Confermi il rientro dalla riparazione?\nQuantità: '+m.qty+' pz\nSN: '+(m.sn||'—'), 'Conferma Rientro', async function(){
+    try {
+      await dbDelete('movimenti', id);
+      S.movimenti = S.movimenti.filter(function(x){ return x.id !== id; });
+      renderMovimenti();
+      renderCodici();
+      renderOrdini();
+    } catch(err){
+      alert('Errore rientro: '+err.message);
+      console.error(err);
+    }
   });
 }
 
@@ -1285,77 +1327,101 @@ function previewImport(){
   window.pendingImport = parsed;
 }
 
-function executeImport(){
+async function executeImport(){
   if(!window.pendingImport || !window.pendingImport.length){
     alert('Nessun dato da importare');
     return;
   }
-  
+
   var imported = 0;
   var errors = [];
-  
-  window.pendingImport.forEach(function(m, idx){
-    // Trova o crea codice
-    var codice = S.codici.find(function(c){ 
-      return c.codice.toLowerCase() === m.codice.toLowerCase(); 
-    });
-    
-    if(!codice){
-      // Crea automaticamente il codice se non esiste
-      codice = {id: uid(), codice: m.codice, desc: '', um: 'pz'};
-      S.codici.push(codice);
+  var nuoviCodiciDb = [];
+  var nuoviMovimentiDb = [];
+  var ordiniDaAggiornare = {}; // id → qtyRes
+
+  try {
+    for(var idx=0; idx<window.pendingImport.length; idx++){
+      var m = window.pendingImport[idx];
+      // Trova o crea codice
+      var codice = S.codici.find(function(c){
+        return c.codice.toLowerCase() === m.codice.toLowerCase();
+      });
+
+      if(!codice){
+        var codNewId = await nextDbId();
+        codice = {id: codNewId, codice: m.codice, desc: '', um: 'pz'};
+        S.codici.push(codice);
+        nuoviCodiciDb.push(codiceToDb(codice));
+      }
+
+      // Verifica giacenza per uscite
+      if(m.tipo === 'out'){
+        var giac = calcGiacenza(codice.id);
+        if(giac < m.qty){
+          errors.push('Riga '+(idx+1)+': giacenza insufficiente per '+m.codice+' (disponibili '+giac+' pz)');
+          continue;
+        }
+      }
+
+      var fifoDetails = null;
+      if(m.tipo === 'out'){
+        var lotti = calcLotti(codice.id);
+        fifoDetails = allocaFIFO(lotti, m.qty);
+        var log = scalOrdiniPerUscita(codice.id, m.qty);
+        // Memorizza le righe ordine da aggiornare (ultimo valore vince per ordine)
+        log.forEach(function(l){
+          var o = S.ordini.find(function(x){ return x.id === l.ordId; });
+          if(o) ordiniDaAggiornare[o.id] = o.qtyRes;
+        });
+      }
+
+      var movNewId = await nextDbId();
+      var movObj = {
+        id: movNewId, tipo: m.tipo, data: m.data, codId: codice.id, qty: m.qty,
+        sn: '', posizione: '', note: m.note,
+        fifoDetails: fifoDetails, riparazioneRientrata: false
+      };
+      S.movimenti.push(movObj);
+      nuoviMovimentiDb.push(movimentoToDb(movObj));
+      imported++;
     }
-    
-    // Verifica giacenza per uscite
-    if(m.tipo === 'out'){
-      var giac = calcGiacenza(codice.id);
-      if(giac < m.qty){
-        errors.push('Riga '+(idx+1)+': giacenza insufficiente per '+m.codice+' (disponibili '+giac+' pz)');
-        return;
+
+    // Persistenza batch
+    document.getElementById('savlbl').textContent='Salvataggio import…';
+    if(nuoviCodiciDb.length){
+      for(var c1=0; c1<nuoviCodiciDb.length; c1+=200){
+        var r1 = await supa.from('codici').insert(nuoviCodiciDb.slice(c1, c1+200));
+        if(r1.error) throw new Error('Insert codici: '+r1.error.message);
       }
     }
-    
-    // Calcola FIFO per uscite
-    var fifoDetails = null;
-    if(m.tipo === 'out'){
-      var lotti = calcLotti(codice.id);
-      fifoDetails = allocaFIFO(lotti, m.qty);
+    if(nuoviMovimentiDb.length){
+      for(var m1=0; m1<nuoviMovimentiDb.length; m1+=200){
+        var r2 = await supa.from('movimenti').insert(nuoviMovimentiDb.slice(m1, m1+200));
+        if(r2.error) throw new Error('Insert movimenti: '+r2.error.message);
+      }
     }
-    
-    // Scala ordini aperti FIFO per le uscite
-    if(m.tipo === 'out') scalOrdiniPerUscita(codice.id, m.qty);
+    // Aggiorna ordini scalati
+    var ordIds = Object.keys(ordiniDaAggiornare);
+    for(var oi=0; oi<ordIds.length; oi++){
+      var oid = parseInt(ordIds[oi]);
+      await dbUpdate('ordini', oid, {qty_res: ordiniDaAggiornare[oid]});
+    }
 
-    // Crea movimento
-    S.movimenti.push({
-      id: uid(),
-      tipo: m.tipo,
-      data: m.data,
-      codId: codice.id,
-      qty: m.qty,
-      sn: '',
-      posizione: '',
-      note: m.note,
-      fifoDetails: fifoDetails,
-      riparazioneRientrata: false
-    });
-    
-    imported++;
-  });
-  
-  closeModal();
-  
-  if(errors.length){
-    alert('Import completato con errori:\n\n'+errors.join('\n')+'\n\nImportati: '+imported+' movimenti');
-  } else {
-    alert('✓ Import completato!\n\n'+imported+' movimenti creati con successo');
+    document.getElementById('savlbl').textContent='Connesso — '+fmtT(new Date());
+    closeModal();
+    if(errors.length){
+      alert('Import completato con errori:\n\n'+errors.join('\n')+'\n\nImportati: '+imported+' movimenti');
+    } else {
+      alert('✓ Import completato!\n\n'+imported+' movimenti creati con successo');
+    }
+    renderMovimenti();
+    renderCodici();
+    updateOrdiniResidui();
+    window.pendingImport = null;
+  } catch(err){
+    alert('Errore durante l\'import: '+err.message);
+    console.error(err);
   }
-  
-  renderMovimenti();
-  renderCodici();
-  updateOrdiniResidui();
-  markUnsaved();
-  
-  window.pendingImport = null;
 }
 
 function parseCSVLine(line){
@@ -1557,7 +1623,7 @@ function nextNumOrdine(){
   return 'ORD-'+String(max+1).padStart(4,'0');
 }
 
-function saveOrdine(id){
+async function saveOrdine(id){
   var rif = (document.getElementById('o-rif').value||'').trim();
   var data = document.getElementById('o-data').value;
   var codId = parseInt(document.getElementById('o-codid').value);
@@ -1570,24 +1636,39 @@ function saveOrdine(id){
   if(qtyOrd <= 0){ alert('Quantità ordinata deve essere > 0'); return; }
   if(qtyRes < 0){ alert('Quantità residua non può essere negativa'); return; }
 
-  if(id){
-    var o = S.ordini.find(function(x){ return x.id===id; });
-    if(o){ o.rif=rif; o.data=data; o.codId=codId; o.qtyOrd=qtyOrd; o.qtyRes=qtyRes; }
-  } else {
-    S.ordini.push({id:uid(), rif:rif, data:data, codId:codId, qtyOrd:qtyOrd, qtyRes:qtyRes});
+  try {
+    if(id){
+      var o = S.ordini.find(function(x){ return x.id===id; });
+      if(o){
+        o.rif=rif; o.data=data; o.codId=codId; o.qtyOrd=qtyOrd; o.qtyRes=qtyRes;
+        await dbUpdate('ordini', id, ordineToDb(o));
+      }
+    } else {
+      var newId = await nextDbId();
+      var nuovo = {id:newId, rif:rif, data:data, codId:codId, qtyOrd:qtyOrd, qtyRes:qtyRes};
+      S.ordini.push(nuovo);
+      await dbInsert('ordini', ordineToDb(nuovo));
+    }
+    closeModal();
+    renderOrdini();
+    renderCodici();
+  } catch(err){
+    alert('Errore salvataggio ordine: '+err.message);
+    console.error(err);
   }
-  closeModal();
-  renderOrdini();
-  renderCodici();
-  markUnsaved();
 }
 
 function delOrdine(id){
-  ask('Eliminare questo ordine?', 'Elimina', function(){
-    S.ordini = S.ordini.filter(function(o){ return o.id!==id; });
-    renderOrdini();
-    renderCodici();
-    markUnsaved();
+  ask('Eliminare questo ordine?', 'Elimina', async function(){
+    try {
+      await dbDelete('ordini', id);
+      S.ordini = S.ordini.filter(function(o){ return o.id!==id; });
+      renderOrdini();
+      renderCodici();
+    } catch(err){
+      alert('Errore eliminazione: '+err.message);
+      console.error(err);
+    }
   });
 }
 
@@ -1711,28 +1792,64 @@ async function ordImportaExcel(file){
         creaCod[cb.dataset.cod] = cb.checked;
       });
 
-      // ESEGUI: cancella tutti gli ordini esistenti, poi reinserisci
+      // ESEGUI: cancella tutti gli ordini esistenti sul DB
+      document.getElementById('savlbl').textContent='Cancellazione ordini esistenti…';
+      // delete WHERE always-true: ON DELETE in batch
+      var delRes = await supa.from('ordini').delete().gte('id', 0);
+      if(delRes.error) throw new Error('Cancellazione ordini: '+delRes.error.message);
       S.ordini = [];
+
+      // Prepara batch insert
+      var nuoviCodiciDb = [];
+      var nuoviOrdiniDb = [];
       var importati = 0, scartati = 0;
-      noti.forEach(function(o){
-        S.ordini.push({id:uid(), rif:'Import Cablotec', data:o.data, codId:o.codId, qtyOrd:o.qty, qtyRes:o.qty});
+
+      for(var iN=0; iN<noti.length; iN++){
+        var oN = noti[iN];
+        var newId = await nextDbId();
+        var ordObj = {id:newId, rif:'Import Cablotec', data:oN.data, codId:oN.codId, qtyOrd:oN.qty, qtyRes:oN.qty};
+        S.ordini.push(ordObj);
+        nuoviOrdiniDb.push(ordineToDb(ordObj));
         importati++;
-      });
-      sconosciuti.forEach(function(o){
-        if(creaCod[o.codice]){
-          var esistente = S.codici.find(function(x){ return x.codice.toLowerCase() === o.codice.toLowerCase(); });
+      }
+
+      for(var iS=0; iS<sconosciuti.length; iS++){
+        var oS = sconosciuti[iS];
+        if(creaCod[oS.codice]){
+          var esistente = S.codici.find(function(x){ return x.codice.toLowerCase() === oS.codice.toLowerCase(); });
           if(!esistente){
-            esistente = {id:uid(), codice:o.codice, desc:'', um:'pz'};
+            var codNewId = await nextDbId();
+            esistente = {id:codNewId, codice:oS.codice, desc:'', um:'pz'};
             S.codici.push(esistente);
+            nuoviCodiciDb.push(codiceToDb(esistente));
           }
-          S.ordini.push({id:uid(), rif:'Import Cablotec', data:o.data, codId:esistente.id, qtyOrd:o.qty, qtyRes:o.qty});
+          var ordNewId = await nextDbId();
+          var ordObj2 = {id:ordNewId, rif:'Import Cablotec', data:oS.data, codId:esistente.id, qtyOrd:oS.qty, qtyRes:oS.qty};
+          S.ordini.push(ordObj2);
+          nuoviOrdiniDb.push(ordineToDb(ordObj2));
           importati++;
         } else {
           scartati++;
         }
-      });
+      }
 
-      renderOrdini(); renderCodici(); markUnsaved();
+      // Insert in chunk per evitare body troppo grandi
+      document.getElementById('savlbl').textContent='Salvataggio nuovi ordini…';
+      if(nuoviCodiciDb.length){
+        for(var c1=0; c1<nuoviCodiciDb.length; c1+=200){
+          var r1 = await supa.from('codici').insert(nuoviCodiciDb.slice(c1, c1+200));
+          if(r1.error) throw new Error('Insert codici: '+r1.error.message);
+        }
+      }
+      if(nuoviOrdiniDb.length){
+        for(var o1=0; o1<nuoviOrdiniDb.length; o1+=200){
+          var r2 = await supa.from('ordini').insert(nuoviOrdiniDb.slice(o1, o1+200));
+          if(r2.error) throw new Error('Insert ordini: '+r2.error.message);
+        }
+      }
+
+      document.getElementById('savlbl').textContent='Connesso — '+fmtT(new Date());
+      renderOrdini(); renderCodici();
       var msg = '✅ Import completato\n\n• Ordini importati: '+importati+'\n• Righe scartate: '+scartati+'\n• Foglio letto: '+sheetName;
       alert(msg);
       fileInput.value='';
@@ -1758,8 +1875,17 @@ async function ordCancellaTutti(){
     + '</div>';
   var ok = await showConfirm(html, 'Cancellare TUTTI gli ordini?', 'Cancella tutto', 'var(--red)');
   if(!ok) return;
-  S.ordini = [];
-  renderOrdini(); renderCodici(); markUnsaved();
+  try {
+    document.getElementById('savlbl').textContent='Cancellazione in corso…';
+    var del = await supa.from('ordini').delete().gte('id', 0);
+    if(del.error) throw del.error;
+    S.ordini = [];
+    renderOrdini(); renderCodici();
+    document.getElementById('savlbl').textContent='Connesso — '+fmtT(new Date());
+  } catch(err){
+    alert('Errore cancellazione: '+err.message);
+    console.error(err);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1860,10 +1986,154 @@ var userRole = null; // 'admin' o 'viewer'
 var saveTimer = null;
 var heartbeatTimer = null;
 var LOCK_TTL = 30000; // 30 secondi
-var LS_PENDING = LS + '_pending'; // backup di emergenza per modifiche non confermate dal server
-var pendingChanges = false; // true se ci sono modifiche non ancora confermate
-var saveInFlight = false;   // true durante una richiesta di salvataggio in corso
+var LS_PENDING = LS + '_pending'; // legacy, non più usato in v3
+var pendingChanges = false; // legacy
+var saveInFlight = false;   // legacy
 var sessionActive = false;  // true dopo tryRestore riuscito (login + connessione)
+var migrationDone = false;  // true se la migrazione blob→tabelle è stata fatta o non serve
+var rtChannel = null;       // canale realtime aggregato
+
+// ═══════════════════════════════════════════════════════════
+// DB HELPERS (v3 — multi-utente realtime)
+// ═══════════════════════════════════════════════════════════
+
+// Genera un id numerico unico via sequenza Postgres (evita conflitti tra client)
+async function nextDbId(){
+  var res = await supa.rpc('next_magazzino_id');
+  if(res.error || res.data == null) throw new Error('nextDbId: '+(res.error && res.error.message));
+  return parseInt(res.data);
+}
+
+// INSERT con propagazione locale immediata; ritorna l'oggetto inserito
+async function dbInsert(table, row){
+  var res = await supa.from(table).insert(row).select().single();
+  if(res.error) throw res.error;
+  return res.data;
+}
+
+async function dbUpdate(table, id, patch){
+  var res = await supa.from(table).update(patch).eq('id', id).select().single();
+  if(res.error) throw res.error;
+  return res.data;
+}
+
+async function dbDelete(table, id){
+  var res = await supa.from(table).delete().eq('id', id);
+  if(res.error) throw res.error;
+  return true;
+}
+
+// Mapper: la BD usa snake_case, l'app JS camelCase. Convertiamo sui due lati.
+function dbToCodice(r){ return {id:r.id, codice:r.codice, desc:r.descrizione||'', um:r.um||'pz'}; }
+function codiceToDb(c){ return {id:c.id, codice:c.codice, descrizione:c.desc||'', um:c.um||'pz', updated_at:new Date().toISOString()}; }
+
+function dbToMovimento(r){
+  return {id:r.id, tipo:r.tipo, data:r.data, codId:r.cod_id, qty:r.qty,
+    sn:r.sn||'', posizione:r.posizione||'', note:r.note||'',
+    fifoDetails:r.fifo_details, riparazioneRientrata:!!r.riparazione_rientrata};
+}
+function movimentoToDb(m){
+  return {id:m.id, tipo:m.tipo, data:m.data, cod_id:m.codId, qty:m.qty,
+    sn:m.sn||'', posizione:m.posizione||'', note:m.note||'',
+    fifo_details:m.fifoDetails||null, riparazione_rientrata:!!m.riparazioneRientrata};
+}
+
+function dbToOrdine(r){ return {id:r.id, rif:r.rif||'', data:r.data, codId:r.cod_id, qtyOrd:r.qty_ord, qtyRes:r.qty_res}; }
+function ordineToDb(o){ return {id:o.id, rif:o.rif||'', data:o.data, cod_id:o.codId, qty_ord:o.qtyOrd, qty_res:o.qtyRes}; }
+
+function dbToMatricola(r){ return {id:r.id, matricola:r.matricola, ddt:r.ddt, dataEntrata:r.data_entrata||''}; }
+function matricolaToDb(m){ return {id:m.id, matricola:m.matricola, ddt:m.ddt, data_entrata:m.dataEntrata||null}; }
+
+// Carica tutto dalle 4 tabelle e popola S
+async function loadAllFromDb(){
+  var [cRes, mRes, oRes, matRes] = await Promise.all([
+    supa.from('codici').select('*'),
+    supa.from('movimenti').select('*'),
+    supa.from('ordini').select('*'),
+    supa.from('matricole').select('*')
+  ]);
+  if(cRes.error) throw cRes.error;
+  if(mRes.error) throw mRes.error;
+  if(oRes.error) throw oRes.error;
+  if(matRes.error) throw matRes.error;
+  S.codici = cRes.data.map(dbToCodice);
+  S.movimenti = mRes.data.map(dbToMovimento);
+  S.ordini = oRes.data.map(dbToOrdine);
+  S.matricole = matRes.data.map(dbToMatricola);
+}
+
+// Migrazione una-tantum: prende il blob vecchio (tabella 'magazzino') e popola le 4 tabelle
+// SOLO se queste sono vuote. Idempotente.
+async function migrateBlobIfNeeded(){
+  // Controlla se le 4 tabelle sono già popolate
+  var count = await supa.from('codici').select('id', {count:'exact', head:true});
+  if(count.error) throw count.error;
+  if(count.count > 0){
+    // Già popolate, nessuna migrazione da fare
+    migrationDone = true;
+    return false;
+  }
+  // Leggi il blob vecchio
+  var blobRes = await supa.from('magazzino').select('data').eq('id','main').maybeSingle();
+  if(blobRes.error || !blobRes.data || !blobRes.data.data || !blobRes.data.data.v){
+    // Nessun blob da migrare (installazione nuova)
+    migrationDone = true;
+    return false;
+  }
+  var blob = blobRes.data.data;
+  document.getElementById('savlbl').textContent='⚙ Migrazione in corso…';
+
+  // Migra codici
+  if(blob.codici && blob.codici.length){
+    var rows = blob.codici.map(function(c){
+      return {id:c.id, codice:c.codice, descrizione:c.desc||'', um:c.um||'pz'};
+    });
+    var r = await supa.from('codici').insert(rows);
+    if(r.error) throw new Error('Migrazione codici: '+r.error.message);
+  }
+  // Migra movimenti
+  if(blob.movimenti && blob.movimenti.length){
+    var rows2 = blob.movimenti.map(movimentoToDb);
+    // Insert a chunk per evitare body troppo grandi
+    for(var i=0; i<rows2.length; i+=500){
+      var chunk = rows2.slice(i, i+500);
+      var r2 = await supa.from('movimenti').insert(chunk);
+      if(r2.error) throw new Error('Migrazione movimenti chunk '+i+': '+r2.error.message);
+    }
+  }
+  // Migra ordini
+  if(blob.ordini && blob.ordini.length){
+    var rows3 = blob.ordini.map(ordineToDb);
+    for(var j=0; j<rows3.length; j+=500){
+      var chunk3 = rows3.slice(j, j+500);
+      var r3 = await supa.from('ordini').insert(chunk3);
+      if(r3.error) throw new Error('Migrazione ordini chunk '+j+': '+r3.error.message);
+    }
+  }
+  // Migra matricole
+  if(blob.matricole && blob.matricole.length){
+    var rows4 = blob.matricole.map(matricolaToDb);
+    for(var k=0; k<rows4.length; k+=500){
+      var chunk4 = rows4.slice(k, k+500);
+      var r4 = await supa.from('matricole').insert(chunk4);
+      if(r4.error) throw new Error('Migrazione matricole chunk '+k+': '+r4.error.message);
+    }
+  }
+  // Aggiorna sequenza al massimo id + 1 per i prossimi insert
+  var maxId = 0;
+  (blob.codici||[]).concat(blob.movimenti||[]).concat(blob.ordini||[]).forEach(function(x){
+    if(typeof x.id === 'number' && x.id > maxId) maxId = x.id;
+  });
+  if(maxId > 0){
+    await supa.rpc('set_magazzino_seq', {new_val: maxId + 1});
+  }
+  migrationDone = true;
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════
+// FINE DB HELPERS
+// ═══════════════════════════════════════════════════════════
 
 function initSupabase(){
   try {
@@ -1882,317 +2152,109 @@ function setReadOnly(val, msg){
     document.getElementById('savdot').className = 'savdot';
     document.getElementById('savdot').style.background = 'var(--or)';
     document.getElementById('savlbl').textContent = msg || '🔒 Sola lettura';
-    // Mostra pulsante "Prendi controllo" se non è viewer permanente
-    if(userRole !== 'viewer') showTakeoverBtn();
   } else {
     document.body.classList.remove('locked-readonly');
     bar.style.background = '';
     bar.style.borderTopColor = '';
     document.getElementById('savdot').style.background = '';
-    hideTakeoverBtn();
   }
 }
 
-function showTakeoverBtn(){
-  if(document.getElementById('takeover-btn')) return;
-  var btn = document.createElement('button');
-  btn.id = 'takeover-btn';
-  btn.className = 'bexp2';
-  btn.style.cssText = 'background:var(--or);color:#fff;margin-right:6px;';
-  btn.textContent = '🔓 Prendi controllo';
-  btn.onclick = manualTakeover;
-  var savebar = document.getElementById('savebar');
-  // Inserisci prima del bottone Esporta JSON
-  var expBtn = savebar.querySelector('.bexp2');
-  if(expBtn) savebar.insertBefore(btn, expBtn);
-  else savebar.appendChild(btn);
-}
-
-function hideTakeoverBtn(){
-  var btn = document.getElementById('takeover-btn');
-  if(btn) btn.remove();
-}
-
-async function manualTakeover(){
-  if(!supa) return;
-  var ok = confirm('Vuoi prendere il controllo? Se un altro utente sta modificando, le sue modifiche non salvate verranno mantenute (sono già sul server). Da questo momento sarai tu a poter modificare.');
-  if(!ok) return;
-  // Forza acquisizione lock (sovrascrive comunque)
-  await supa.from('magazzino').update({locked_by: myUserId, lock_ts: Date.now()}).eq('id','main');
-  // Ricarica dati freschi prima di abilitare modifiche
-  await reloadFromServer();
-  setReadOnly(false);
-  document.getElementById('savlbl').textContent='Controllo acquisito — '+fmtT(new Date());
-  startHeartbeat();
-}
-
-async function reloadFromServer(){
-  if(!supa || !sessionActive) return;
-  try {
-    var res = await supa.from('magazzino').select('data,updated_at').eq('id','main').single();
-    if(res.data && res.data.data && res.data.data.v){
-      loadObj(res.data.data);
-      try { localStorage.setItem(LS, JSON.stringify(res.data.data)); } catch(e){}
-      renderCodici(); renderMovimenti(); renderOrdini(); matRender();
-    }
-  } catch(e){ console.error('reloadFromServer:', e); }
-}
-
+// Stub: in v3 non c'è più autosave (le mutazioni scrivono direttamente sul DB).
+// Le vecchie chiamate a markUnsaved() rimangono come no-op così non rompiamo nulla.
 function markUnsaved(){
-  if(isReadOnly) return;
-  pendingChanges = true;
-  document.getElementById('savdot').className='savdot unsaved';
-  document.getElementById('savlbl').textContent='Modifiche non salvate';
-  // Backup IMMEDIATO su localStorage: se il browser chiude prima dell'autosave, i dati ci sono.
-  try { localStorage.setItem(LS_PENDING, JSON.stringify(serialize())); } catch(e){}
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(autoSave, 600);
+  // intenzionalmente vuoto in v3
 }
 
-async function autoSave(retryCount){
-  if(isReadOnly) return;
-  retryCount = retryCount || 0;
-  if(saveInFlight){
-    // Salvataggio già in corso: riprova quando finisce
-    saveTimer = setTimeout(function(){ autoSave(0); }, 300);
-    return;
-  }
-  saveInFlight = true;
-  // Snapshot dei dati attuali, così le modifiche fatte durante il save non vengono perse.
-  // contentBefore: stringa del solo contenuto (senza savedAt) per confronto post-save
-  var snapshot = serialize();
-  var contentBefore = serializeContent();
-  document.getElementById('savdot').className='savdot unsaved';
-  document.getElementById('savlbl').textContent='Salvataggio…';
-
-  if(supa){
-    try{
-      var res = await supa.from('magazzino').update({
-        data: snapshot,
-        updated_at: new Date().toISOString()
-      }).eq('id','main');
-      if(res.error) throw res.error;
-      // SALVATAGGIO CONFERMATO dal server
-      saveInFlight = false;
-      // Aggiorna mirror locale solo dopo conferma server
-      try { localStorage.setItem(LS, JSON.stringify(snapshot)); } catch(e){}
-      // Se nel frattempo è arrivata altra modifica REALE (contenuto diverso), rilancia il salvataggio
-      if(serializeContent() !== contentBefore){
-        autoSave(0);
-        return;
-      }
-      // Tutto sincronizzato: rimuovi backup pendente
-      try { localStorage.removeItem(LS_PENDING); } catch(e){}
-      pendingChanges = false;
-      document.getElementById('savdot').className='savdot saved';
-      document.getElementById('savlbl').textContent='Salvato — '+fmtT(new Date());
-    } catch(e){
-      saveInFlight = false;
-      console.error('[autoSave] errore tentativo '+(retryCount+1)+':', e);
-      if(retryCount < 4){
-        // Retry con backoff: 1s, 2s, 4s, 8s
-        var delay = 1000 * Math.pow(2, retryCount);
-        document.getElementById('savdot').className='savdot unsaved';
-        document.getElementById('savlbl').textContent='Errore — riprovo tra '+(delay/1000)+'s ('+(retryCount+1)+'/5)';
-        setTimeout(function(){ autoSave(retryCount+1); }, delay);
-      } else {
-        // Tutti i retry falliti: backup è in LS_PENDING, segnala chiaramente
-        document.getElementById('savdot').className='savdot unsaved';
-        document.getElementById('savlbl').textContent='⚠ NON salvato sul server (backup locale OK) — controlla la connessione';
-      }
-    }
-  } else {
-    // Solo localStorage (no Supabase)
-    try{
-      localStorage.setItem(LS, JSON.stringify(snapshot));
-      try { localStorage.removeItem(LS_PENDING); } catch(e){}
-      saveInFlight = false;
-      pendingChanges = false;
-      document.getElementById('savdot').className='savdot saved';
-      document.getElementById('savlbl').textContent='Salvato (locale) — '+fmtT(new Date());
-    } catch(e){ saveInFlight = false; }
-  }
-}
-
-// Avvisa l'utente se chiude la pagina con modifiche non ancora confermate dal server
-window.addEventListener('beforeunload', function(e){
-  if(pendingChanges || saveInFlight){
-    e.preventDefault();
-    e.returnValue = 'Ci sono modifiche non ancora salvate sul server. Sei sicuro di voler chiudere?';
-    return e.returnValue;
-  }
-});
-
-// Quando la pagina viene effettivamente chiusa o navigata via, rilascia il lock.
-// pagehide è più affidabile di unload sui browser moderni (specialmente mobile).
-window.addEventListener('pagehide', function(){
-  if(supa && sessionActive && !isReadOnly && myUserId){
-    // Usa fetch keepalive per garantire che la richiesta vada anche durante la chiusura
-    try {
-      fetch(SUPA_URL+'/rest/v1/magazzino?id=eq.main', {
-        method:'PATCH',
-        headers:{
-          'Content-Type':'application/json',
-          'apikey': SUPA_KEY,
-          'Authorization': 'Bearer '+SUPA_KEY,
-          'Prefer':'return=minimal'
-        },
-        body: JSON.stringify({locked_by: null, lock_ts: 0}),
-        keepalive: true
-      });
-    } catch(e){}
-  }
-});
-
-// OPZIONE 3: tab in background → rilascia lock + read-only
-//            tab in foreground → ricarica dati freschi + ritenta lock
-var visibilityBusy = false;
-document.addEventListener('visibilitychange', async function(){
-  if(!supa || !sessionActive || userRole === 'viewer') return;
-  if(visibilityBusy) return;
-  visibilityBusy = true;
-  try {
-    if(document.hidden){
-    // ─── Tab nascosto ───
-    // Se eravamo editor: salva eventuali pending, rilascia lock, passa in read-only
-    if(!isReadOnly){
-      if(pendingChanges || saveInFlight){
-        // Aspetta che il save in corso completi prima di rilasciare
-        try { await autoSave(0); } catch(e){}
-      }
-      clearInterval(heartbeatTimer);
-      try { await releaseLock(); } catch(e){}
-      setReadOnly(true, '🔒 Scheda in background — read-only');
-    }
-  } else {
-    // ─── Tab tornato visibile ───
-    // Ricarica SEMPRE i dati freschi dal server, poi ritenta il lock
-    document.getElementById('savlbl').textContent='Sincronizzazione…';
-    await reloadFromServer();
-    // Verifica stato lock attuale
-    try {
-      var res = await supa.from('magazzino').select('locked_by,lock_ts,updated_at').eq('id','main').single();
-      var lockedBy = res.data && res.data.locked_by;
-      var lockTs = res.data && res.data.lock_ts || 0;
-      var lockLive = lockedBy && lockedBy !== myUserId && (Date.now() - lockTs) < LOCK_TTL;
-
-      if(lockLive){
-        setReadOnly(true, '🔒 Un altro utente sta modificando — attesa rilascio…');
-        startReadonlyPoller();
-      } else {
-        var ok = await acquireLock();
-        if(ok){
-          setReadOnly(false);
-          startHeartbeat();
-          var sv = res.data && res.data.updated_at ? new Date(res.data.updated_at) : new Date();
-          document.getElementById('savdot').className='savdot saved';
-          document.getElementById('savlbl').textContent='Connesso — '+fmtT(sv);
-        } else {
-          setReadOnly(true, '🔒 Un altro utente è entrato — attesa rilascio…');
-          startReadonlyPoller();
-        }
-      }
-    } catch(e){ console.error('visibilitychange:', e); }
-    }
-  } finally {
-    visibilityBusy = false;
-  }
-});
-
-async function acquireLock(){
-  var now = Date.now();
-  // Leggi stato lock attuale
-  var res = await supa.from('magazzino').select('locked_by,lock_ts').eq('id','main').single();
-  if(res.data){
-    var age = now - (res.data.lock_ts||0);
-    if(res.data.locked_by && res.data.locked_by !== myUserId && age < LOCK_TTL){
-      return false; // lock attivo di qualcun altro
-    }
-  }
-  // Acquisisci lock
-  await supa.from('magazzino').update({
-    locked_by: myUserId,
-    lock_ts: now
-  }).eq('id','main');
-  return true;
-}
-
-async function releaseLock(){
-  if(!supa) return;
-  await supa.from('magazzino').update({
-    locked_by: null,
-    lock_ts: 0
-  }).eq('id','main');
-}
-
-function startHeartbeat(){
-  clearInterval(heartbeatTimer);
-  heartbeatTimer = setInterval(async function(){
-    if(isReadOnly || !supa) return;
-    await supa.from('magazzino').update({lock_ts: Date.now()}).eq('id','main');
-  }, 10000);
-}
-
-function startReadonlyPoller(){
-  // Riprova ad acquisire il lock ogni 15 secondi
-  var poller = setInterval(async function(){
-    if(!isReadOnly){ clearInterval(poller); return; }
-    var ok = await acquireLock();
-    if(ok){
-      clearInterval(poller);
-      setReadOnly(false);
-      document.getElementById('savlbl').textContent='Connesso — '+fmtT(new Date());
-      startHeartbeat();
-    }
-  }, 15000);
-}
-
+// ═══════════════════════════════════════════════════════════
+// REALTIME — sottoscrizione alle 4 tabelle (v3)
+// ═══════════════════════════════════════════════════════════
 function startRealtime(){
-  supa.channel('magazzino-changes')
-    .on('postgres_changes', {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'magazzino',
-      filter: 'id=eq.main'
-    }, function(payload){
-      var newData = payload.new;
-      var age = Date.now() - (newData.lock_ts||0);
-      var lockAttivo = newData.locked_by && newData.locked_by !== myUserId && age < LOCK_TTL;
-      if(!isReadOnly && lockAttivo){
-        // Qualcun altro ha preso il controllo (forced takeover): passiamo in read-only
-        clearInterval(heartbeatTimer);
-        // Carica anche i dati freschi che ha appena scritto
-        if(newData.data && newData.data.v){
-          try { loadObj(newData.data); renderCodici(); renderMovimenti(); renderOrdini(); matRender(); } catch(e){}
-        }
-        setReadOnly(true, '🔒 Un altro utente ha preso il controllo — read-only');
-        startReadonlyPoller();
-        return;
+  if(rtChannel){ try { supa.removeChannel(rtChannel); } catch(e){} }
+  rtChannel = supa.channel('magazzino-v3')
+    .on('postgres_changes', {event:'*', schema:'public', table:'codici'},    function(p){ handleRT('codici', p); })
+    .on('postgres_changes', {event:'*', schema:'public', table:'movimenti'}, function(p){ handleRT('movimenti', p); })
+    .on('postgres_changes', {event:'*', schema:'public', table:'ordini'},    function(p){ handleRT('ordini', p); })
+    .on('postgres_changes', {event:'*', schema:'public', table:'matricole'}, function(p){ handleRT('matricole', p); })
+    .subscribe(function(status){
+      // Aggiornamento label connessione
+      if(status === 'SUBSCRIBED'){
+        document.getElementById('savdot').className='savdot saved';
       }
-      if(isReadOnly && !lockAttivo){
-        // Lock liberato — proviamo ad acquisire
-        acquireLock().then(function(ok){
-          if(ok){
-            setReadOnly(false);
-            startHeartbeat();
-            document.getElementById('savlbl').textContent='Connesso — '+fmtT(new Date());
-            // Ricarica dati freschi appena diventiamo editor
-            reloadFromServer();
-          }
-        });
-        return;
+    });
+}
+
+// Coalescing dei rerender: in caso di burst di eventi realtime (es. update di
+// tanti ordini in batch), accumuliamo i render e ne facciamo uno solo per frame
+var rtPendingRender = {codici:false, movimenti:false, ordini:false, matricole:false};
+var rtRenderScheduled = false;
+function rtScheduleRender(){
+  if(rtRenderScheduled) return;
+  rtRenderScheduled = true;
+  requestAnimationFrame(function(){
+    rtRenderScheduled = false;
+    if(rtPendingRender.codici)    { rtPendingRender.codici = false;    renderCodici(); }
+    if(rtPendingRender.movimenti) { rtPendingRender.movimenti = false; renderMovimenti(); }
+    if(rtPendingRender.ordini)    { rtPendingRender.ordini = false;    renderOrdini(); }
+    if(rtPendingRender.matricole) { rtPendingRender.matricole = false; matRender(); }
+  });
+}
+
+// Applica un evento realtime allo stato locale e ridisegna la UI interessata
+function handleRT(table, payload){
+  try {
+    var newRow = payload.new;
+    var oldRow = payload.old;
+    if(table === 'codici'){
+      if(payload.eventType === 'INSERT'){
+        if(!S.codici.find(function(x){ return x.id === newRow.id; })) S.codici.push(dbToCodice(newRow));
+      } else if(payload.eventType === 'UPDATE'){
+        var i = S.codici.findIndex(function(x){ return x.id === newRow.id; });
+        if(i >= 0) S.codici[i] = dbToCodice(newRow);
+        else S.codici.push(dbToCodice(newRow));
+      } else if(payload.eventType === 'DELETE'){
+        S.codici = S.codici.filter(function(x){ return x.id !== oldRow.id; });
+        S.movimenti = S.movimenti.filter(function(m){ return m.codId !== oldRow.id; });
+        S.ordini = S.ordini.filter(function(o){ return o.codId !== oldRow.id; });
+        rtPendingRender.movimenti = true; rtPendingRender.ordini = true;
       }
-      // Se siamo in sola lettura, aggiorna i dati in tempo reale
-      if(isReadOnly && newData.data && newData.data.v){
-        try{
-          loadObj(newData.data);
-          renderCodici(); renderMovimenti(); renderOrdini(); matRender();
-          var sv = new Date(newData.updated_at||Date.now());
-          document.getElementById('savlbl').textContent='🔒 Aggiornato — '+fmtT(sv);
-        } catch(e){}
+      rtPendingRender.codici = true;
+    } else if(table === 'movimenti'){
+      if(payload.eventType === 'INSERT'){
+        if(!S.movimenti.find(function(x){ return x.id === newRow.id; })) S.movimenti.push(dbToMovimento(newRow));
+      } else if(payload.eventType === 'UPDATE'){
+        var i2 = S.movimenti.findIndex(function(x){ return x.id === newRow.id; });
+        if(i2 >= 0) S.movimenti[i2] = dbToMovimento(newRow);
+        else S.movimenti.push(dbToMovimento(newRow));
+      } else if(payload.eventType === 'DELETE'){
+        S.movimenti = S.movimenti.filter(function(x){ return x.id !== oldRow.id; });
       }
-    })
-    .subscribe();
+      rtPendingRender.movimenti = true; rtPendingRender.codici = true; rtPendingRender.ordini = true;
+    } else if(table === 'ordini'){
+      if(payload.eventType === 'INSERT'){
+        if(!S.ordini.find(function(x){ return x.id === newRow.id; })) S.ordini.push(dbToOrdine(newRow));
+      } else if(payload.eventType === 'UPDATE'){
+        var i3 = S.ordini.findIndex(function(x){ return x.id === newRow.id; });
+        if(i3 >= 0) S.ordini[i3] = dbToOrdine(newRow);
+        else S.ordini.push(dbToOrdine(newRow));
+      } else if(payload.eventType === 'DELETE'){
+        S.ordini = S.ordini.filter(function(x){ return x.id !== oldRow.id; });
+      }
+      rtPendingRender.ordini = true;
+    } else if(table === 'matricole'){
+      if(payload.eventType === 'INSERT'){
+        if(!S.matricole.find(function(x){ return x.id === newRow.id; })) S.matricole.push(dbToMatricola(newRow));
+      } else if(payload.eventType === 'UPDATE'){
+        var i4 = S.matricole.findIndex(function(x){ return x.id === newRow.id; });
+        if(i4 >= 0) S.matricole[i4] = dbToMatricola(newRow);
+        else S.matricole.push(dbToMatricola(newRow));
+      } else if(payload.eventType === 'DELETE'){
+        S.matricole = S.matricole.filter(function(x){ return x.id !== oldRow.id; });
+      }
+      rtPendingRender.matricole = true;
+    }
+    rtScheduleRender();
+  } catch(e){ console.error('handleRT '+table, e); }
 }
 
 async function doLogin(){
@@ -2265,13 +2327,8 @@ async function doLogout(){
 async function tryRestore(){
   // NON ri-creare il client se esiste già (evita Multiple GoTrueClient)
   if(!supa && !initSupabase()){
-    // Fallback localStorage
-    try{
-      var o = JSON.parse(localStorage.getItem(LS)||'null');
-      if(!o) return;
-      loadObj(o);
-      renderCodici(); renderOrdini(); matRender();
-    } catch(e){}
+    // Niente fallback locale in v3: serve il server
+    document.getElementById('savlbl').textContent='⚠ Supabase non disponibile';
     return;
   }
 
@@ -2280,99 +2337,29 @@ async function tryRestore(){
   sessionActive = true;
 
   try {
-    // Avvia realtime
+    // 1) Migra blob → tabelle se necessario (idempotente)
+    await migrateBlobIfNeeded();
+
+    // 2) Carica tutti i dati dalle 4 tabelle
+    document.getElementById('savlbl').textContent='Caricamento dati…';
+    await loadAllFromDb();
+    renderCodici(); renderMovimenti(); renderOrdini(); matRender();
+
+    // 3) Avvia realtime sulle 4 tabelle
     startRealtime();
 
-    // Carica dati dal server
-    var res = await supa.from('magazzino').select('data,updated_at,locked_by,lock_ts').eq('id','main').single();
-    var serverData = (res.data && res.data.data && res.data.data.v) ? res.data.data : null;
-    var serverTime = res.data && res.data.updated_at ? new Date(res.data.updated_at).getTime() : 0;
-
-    // Carica e mostra subito i dati (in ogni caso, anche se andremo in read-only)
-    if(serverData){
-      loadObj(serverData);
-      try { localStorage.setItem(LS, JSON.stringify(serverData)); } catch(e){}
-      renderCodici(); renderMovimenti(); renderOrdini(); matRender();
-    }
-
-    // Se l'utente è viewer permanente, salta tutta la logica del lock (è già read-only)
+    // 4) Stato connesso
     if(userRole === 'viewer'){
-      var sv = new Date(res.data.updated_at);
-      document.getElementById('savlbl').textContent='👁 Visualizzazione — aggiornato '+fmtT(sv);
-      return;
-    }
-
-    // Tenta di acquisire il lock
-    var lockedBy = res.data && res.data.locked_by;
-    var lockTs = res.data && res.data.lock_ts || 0;
-    var lockAge = Date.now() - lockTs;
-    var lockLive = lockedBy && lockedBy !== myUserId && lockAge < LOCK_TTL;
-
-    if(lockLive){
-      // Qualcun altro sta editando — entra in read-only
-      setReadOnly(true, '🔒 Un altro utente sta modificando — attesa rilascio…');
-      startReadonlyPoller();
-      return;
-    }
-
-    // Acquisisci il lock per noi
-    var lockOk = await acquireLock();
-    if(!lockOk){
-      // Race condition: qualcun altro è entrato nello stesso istante
-      setReadOnly(true, '🔒 Un altro utente è entrato — attesa rilascio…');
-      startReadonlyPoller();
-      return;
-    }
-
-    // ✅ Siamo l'editor. Avvia heartbeat.
-    startHeartbeat();
-
-    // Controlla recovery pending (solo ora che abbiamo il lock)
-    var pending = null;
-    try { pending = JSON.parse(localStorage.getItem(LS_PENDING)||'null'); } catch(e){}
-    var pendingTime = (pending && pending.savedAt) ? new Date(pending.savedAt).getTime() : 0;
-
-    if(pending && pendingTime > serverTime + 1000){
-      var diff = Math.round((pendingTime - serverTime)/1000);
-      var ok = confirm(
-        '⚠ RECUPERO MODIFICHE NON SALVATE\n\n' +
-        'Sono state trovate modifiche locali più recenti del server di '+diff+' secondi.\n' +
-        'Probabilmente l\'ultima sessione si è chiusa prima del salvataggio.\n\n' +
-        'OK = Recupera le modifiche locali (verranno ricaricate sul server)\n' +
-        'Annulla = Ignora e usa la versione del server'
-      );
-      if(ok){
-        loadObj(pending);
-        renderCodici(); renderMovimenti(); renderOrdini(); matRender();
-        document.getElementById('savdot').className='savdot unsaved';
-        document.getElementById('savlbl').textContent='Recupero in corso…';
-        pendingChanges = true;
-        autoSave(0);
-        return;
-      } else {
-        try { localStorage.removeItem(LS_PENDING); } catch(e){}
-      }
-    } else if(pending){
-      try { localStorage.removeItem(LS_PENDING); } catch(e){}
-    }
-
-    if(serverData){
-      var sv2 = new Date(res.data.updated_at);
+      setReadOnly(true, '👁 Modalità visualizzazione');
+    } else {
       document.getElementById('savdot').className='savdot saved';
-      document.getElementById('savlbl').textContent='Connesso — '+fmtD(sv2.toISOString())+' '+fmtT(sv2);
+      document.getElementById('savlbl').textContent='Connesso — '+fmtT(new Date());
     }
   } catch(e){
     console.error('tryRestore error:', e);
-    setReadOnly(true, 'Errore connessione — modalità locale');
-    try{
-      var pending2 = null;
-      try { pending2 = JSON.parse(localStorage.getItem(LS_PENDING)||'null'); } catch(e2){}
-      var mirror = JSON.parse(localStorage.getItem(LS)||'null');
-      var pTime = pending2 && pending2.savedAt ? new Date(pending2.savedAt).getTime() : 0;
-      var mTime = mirror && mirror.savedAt ? new Date(mirror.savedAt).getTime() : 0;
-      var src = (pTime > mTime) ? pending2 : mirror;
-      if(src){ loadObj(src); renderCodici(); renderMovimenti(); renderOrdini(); matRender(); }
-    } catch(e2){}
+    document.getElementById('savdot').className='savdot unsaved';
+    document.getElementById('savlbl').textContent='⚠ Errore: '+(e.message||'connessione');
+    setReadOnly(true, '⚠ Errore — ricarica la pagina');
   }
 }
 
@@ -2807,53 +2794,100 @@ async function ddtImportaMagazzino(){
     return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
   })();
 
-  ddtArticoli.forEach(function(r, i){
-    if(!r.codice){ errors.push('Riga '+(i+1)+': codice mancante'); return; }
-    if(!r.qty || r.qty <= 0){ errors.push('Riga '+(i+1)+': quantità non valida'); return; }
-    var codice = S.codici.find(function(c){ return c.codice.toLowerCase()===r.codice.toLowerCase(); });
-    if(!codice){
-      codice = {id:uid(), codice:r.codice, desc:'', um:'pz'};
-      S.codici.push(codice);
+  var nuoviCodiciDb = [];
+  var nuoviMovimentiDb = [];
+  var ordiniDaAggiornare = {};
+  var nuoveMatricoleDb = [];
+  var matricoleDaCancellare = [];
+
+  try {
+    for(var i=0; i<ddtArticoli.length; i++){
+      var r = ddtArticoli[i];
+      if(!r.codice){ errors.push('Riga '+(i+1)+': codice mancante'); continue; }
+      if(!r.qty || r.qty <= 0){ errors.push('Riga '+(i+1)+': quantità non valida'); continue; }
+      var codice = S.codici.find(function(c){ return c.codice.toLowerCase()===r.codice.toLowerCase(); });
+      if(!codice){
+        var codNewId = await nextDbId();
+        codice = {id:codNewId, codice:r.codice, desc:'', um:'pz'};
+        S.codici.push(codice);
+        nuoviCodiciDb.push(codiceToDb(codice));
+      }
+      if(ddtTipo === 'out'){
+        var giac = calcGiacenza(codice.id);
+        if(giac < r.qty){ errors.push('Riga '+(i+1)+': giacenza insufficiente per '+r.codice+' (disp. '+giac+')'); continue; }
+      }
+      var fifoDetails = null;
+      if(ddtTipo === 'out'){
+        fifoDetails = allocaFIFO(calcLotti(codice.id), r.qty);
+        var log = scalOrdiniPerUscita(codice.id, r.qty);
+        log.forEach(function(l){
+          var o = S.ordini.find(function(x){ return x.id === l.ordId; });
+          if(o) ordiniDaAggiornare[o.id] = o.qtyRes;
+        });
+      }
+      var dataMov = (r.data && r.data.length === 10) ? (r.data+'T'+nowHHMM) : r.data;
+      var movNewId = await nextDbId();
+      var movObj = {
+        id:movNewId, tipo:ddtTipo, data:dataMov, codId:codice.id, qty:r.qty,
+        sn:'', posizione:'', note:'Da DDT', fifoDetails:fifoDetails, riparazioneRientrata:false
+      };
+      S.movimenti.push(movObj);
+      nuoviMovimentiDb.push(movimentoToDb(movObj));
+      imported++;
     }
-    if(ddtTipo === 'out'){
-      var giac = calcGiacenza(codice.id);
-      if(giac < r.qty){ errors.push('Riga '+(i+1)+': giacenza insufficiente per '+r.codice+' (disp. '+giac+')'); return; }
-    }
-    var fifoDetails = null;
-    if(ddtTipo === 'out'){
-      fifoDetails = allocaFIFO(calcLotti(codice.id), r.qty);
-      scalOrdiniPerUscita(codice.id, r.qty);
-    }
-    // Combina data DDT (YYYY-MM-DD) con ora attuale (HH:mm) → formato datetime-local
-    var dataMov = (r.data && r.data.length === 10) ? (r.data+'T'+nowHHMM) : r.data;
-    S.movimenti.push({
-      id:uid(), tipo:ddtTipo, data:dataMov, codId:codice.id, qty:r.qty,
-      sn:'', posizione:'', note:'Da DDT', fifoDetails:fifoDetails, riparazioneRientrata:false
-    });
-    imported++;
-  });
-  renderMovimenti(); renderCodici(); renderOrdini(); markUnsaved();
-  if(errors.length){
-    alert('Import con errori:\n\n'+errors.join('\n')+'\n\nImportati: '+imported);
-  } else {
-    // Estrai matricole automaticamente dal PDF DDT (usa testo già estratto)
+
+    // Estrai matricole dal PDF se è un DDT in entrata/uscita
     if(ddtFile && ddtFile.type === 'application/pdf' && ddtPdfText){
       try {
         var matMatches = (ddtPdfText.match(/(?<!\d)\d{10}(?!\d)/g) || []).filter(function(m,i,a){ return a.indexOf(m)===i; });
         var matOggi = ddtArticoli.length ? ddtArticoli[0].data : new Date().toISOString().substring(0,10);
         if(ddtTipo === 'in'){
-          matMatches.forEach(function(m){
-            var esiste = S.matricole.find(function(r){ return r.matricola===m && r.ddt===ddtFile.name; });
-            if(!esiste) S.matricole.push({id:uid2(), matricola:m, ddt:matNormalizzaNomeDDT(ddtFile.name), dataEntrata:matOggi});
+          matMatches.forEach(function(mat){
+            var esiste = S.matricole.find(function(rr){ return rr.matricola===mat && rr.ddt===ddtFile.name; });
+            if(!esiste){
+              var newMatObj = {id:uid2(), matricola:mat, ddt:matNormalizzaNomeDDT(ddtFile.name), dataEntrata:matOggi};
+              S.matricole.push(newMatObj);
+              nuoveMatricoleDb.push(matricolaToDb(newMatObj));
+            }
           });
         } else {
-          // Uscita: marca le matricole corrispondenti come OK
-          matMatches.forEach(function(m){ matSegnaUscita(m, ddtFile.name, matOggi); });
+          matMatches.forEach(function(mat){
+            var removedId = matSegnaUscita(mat, ddtFile.name, matOggi);
+            if(removedId) matricoleDaCancellare.push(removedId);
+          });
         }
-        matRender(); markUnsaved();
       } catch(e){ console.error('[MAT] errore estrazione matricole:', e); }
     }
 
+    // Persistenza batch su DB
+    document.getElementById('savlbl').textContent='Salvataggio DDT…';
+    if(nuoviCodiciDb.length){
+      for(var c1=0; c1<nuoviCodiciDb.length; c1+=200){
+        var r1 = await supa.from('codici').insert(nuoviCodiciDb.slice(c1, c1+200));
+        if(r1.error) throw new Error('Insert codici: '+r1.error.message);
+      }
+    }
+    if(nuoviMovimentiDb.length){
+      for(var m1=0; m1<nuoviMovimentiDb.length; m1+=200){
+        var r2 = await supa.from('movimenti').insert(nuoviMovimentiDb.slice(m1, m1+200));
+        if(r2.error) throw new Error('Insert movimenti: '+r2.error.message);
+      }
+    }
+    var ordIds = Object.keys(ordiniDaAggiornare);
+    for(var oi=0; oi<ordIds.length; oi++){
+      var oid = parseInt(ordIds[oi]);
+      await dbUpdate('ordini', oid, {qty_res: ordiniDaAggiornare[oid]});
+    }
+    if(nuoveMatricoleDb.length){
+      var r3 = await supa.from('matricole').insert(nuoveMatricoleDb);
+      if(r3.error) throw new Error('Insert matricole: '+r3.error.message);
+    }
+    if(matricoleDaCancellare.length){
+      var r4 = await supa.from('matricole').delete().in('id', matricoleDaCancellare);
+      if(r4.error) throw new Error('Delete matricole: '+r4.error.message);
+    }
+
+    // Registra hash DDT (anti-duplicato)
     if(supa && ddtFileHash){
       await supa.from('ddt_hashes').upsert({
         hash: ddtFileHash,
@@ -2862,10 +2896,20 @@ async function ddtImportaMagazzino(){
         imported_by: myUserId
       }, { onConflict: 'hash' });
     }
-    ddtClear();
-    // Scroll alla tabella movimenti (siamo già nella scheda)
-    var tbl = document.querySelector('#sec-movimenti table.rt');
-    if(tbl) tbl.scrollIntoView({behavior:'smooth', block:'start'});
+
+    document.getElementById('savlbl').textContent='Connesso — '+fmtT(new Date());
+    renderMovimenti(); renderCodici(); renderOrdini(); matRender();
+
+    if(errors.length){
+      alert('Import con errori:\n\n'+errors.join('\n')+'\n\nImportati: '+imported);
+    } else {
+      ddtClear();
+      var tbl = document.querySelector('#sec-movimenti table.rt');
+      if(tbl) tbl.scrollIntoView({behavior:'smooth', block:'start'});
+    }
+  } catch(err){
+    alert('Errore durante l\'import DDT: '+err.message);
+    console.error(err);
   }
 }
 
@@ -2918,10 +2962,11 @@ function matNormalizzaNomeDDT(filename){
 function matSegnaUscita(matricola, ddtCablotec, data){
   var idx = S.matricole.findIndex(function(x){ return x.matricola===matricola; });
   if(idx !== -1){
+    var rem = S.matricole[idx];
     S.matricole.splice(idx, 1);
-    return true;
+    return rem.id; // ritorna id per propagare delete al DB
   }
-  return false;
+  return null;
 }
 
 function matRender(){
@@ -3024,25 +3069,37 @@ function matUpdateMatricola(input){
   if(r){ r.matricola = val; markUnsaved(); }
 }
 
-function matRimuovi(id){
-  S.matricole = S.matricole.filter(function(r){ return r.id !== id; });
-  matRender(); markUnsaved();
+async function matRimuovi(id){
+  try {
+    await dbDelete('matricole', id);
+    S.matricole = S.matricole.filter(function(r){ return r.id !== id; });
+    matRender();
+  } catch(err){ alert('Errore: '+err.message); }
 }
 
 function matRinominaColonna(col){
   var nuovo = prompt('Rinomina colonna "'+col+'":', col);
   if(!nuovo || !nuovo.trim() || nuovo.trim()===col) return;
   nuovo = nuovo.trim();
-  // Aggiorna tutti i record con questo ddt
-  S.matricole.forEach(function(r){ if(r.ddt===col) r.ddt=nuovo; });
-  matRender(); markUnsaved();
+  // Aggiorna tutti i record con questo ddt — DB e memoria
+  var daAggiornare = S.matricole.filter(function(r){ return r.ddt===col; });
+  Promise.all(daAggiornare.map(function(r){
+    r.ddt = nuovo;
+    return dbUpdate('matricole', r.id, {ddt: nuovo});
+  })).then(function(){
+    matRender();
+  }).catch(function(err){ alert('Errore rinomina: '+err.message); });
 }
 
 function matEliminaColonna(col){
   var n = S.matricole.filter(function(r){ return r.ddt === col; }).length;
-  ask('Eliminare la colonna "'+col+'" con '+n+' matricole?', 'Elimina', function(){
-    S.matricole = S.matricole.filter(function(r){ return r.ddt !== col; });
-    matRender(); markUnsaved();
+  ask('Eliminare la colonna "'+col+'" con '+n+' matricole?', 'Elimina', async function(){
+    try {
+      var del = await supa.from('matricole').delete().eq('ddt', col);
+      if(del.error) throw del.error;
+      S.matricole = S.matricole.filter(function(r){ return r.ddt !== col; });
+      matRender();
+    } catch(err){ alert('Errore: '+err.message); }
   });
 }
 
@@ -3070,7 +3127,7 @@ function _matOpenModal(ddtPresel, ddtList){
     document.getElementById('m-mat-nuovo-wrap').style.display = this.value ? 'none' : 'block';
   };
 }
-function matSalvaManuale(){
+async function matSalvaManuale(){
   var num = (document.getElementById('m-mat-num').value||'').trim();
   if(!/^\d{10}$/.test(num)){ alert('Inserisci una matricola di esattamente 10 cifre.'); return; }
   var ddtSel = document.getElementById('m-mat-ddt').value;
@@ -3079,14 +3136,20 @@ function matSalvaManuale(){
   if(!ddt){ alert('Specifica il DDT Bellini.'); return; }
   var data = document.getElementById('m-mat-data').value || new Date().toISOString().substring(0,10);
   if(S.matricole.find(function(r){ return r.matricola===num && r.ddt===ddt; })){ alert('Matricola già presente in questo DDT.'); return; }
-  S.matricole.push({id:uid2(), matricola:num, ddt:ddt, dataEntrata:data});
-  closeModal(); matRender(); markUnsaved();
+  try {
+    var nuovo = {id:uid2(), matricola:num, ddt:ddt, dataEntrata:data};
+    S.matricole.push(nuovo);
+    await dbInsert('matricole', matricolaToDb(nuovo));
+    closeModal(); matRender();
+  } catch(err){
+    alert('Errore: '+err.message);
+  }
 }
 
 function matImportaExcel(file){
   if(!file) return;
   var reader = new FileReader();
-  reader.onload = function(e){
+  reader.onload = async function(e){
     try {
       var wb = XLSX.read(e.target.result, {type:'array'});
       var ws = wb.Sheets[wb.SheetNames[0]];
@@ -3095,6 +3158,7 @@ function matImportaExcel(file){
       var headers = data[0];
       var oggi = new Date().toISOString().substring(0,10);
       var nuove = 0, skipped = 0;
+      var nuoveDb = [];
       for(var col=0; col<headers.length; col++){
         var ddt = (headers[col]||'').toString().trim();
         if(!ddt) continue;
@@ -3104,11 +3168,20 @@ function matImportaExcel(file){
           var mat = val.replace(/\D/g,'');
           if(mat.length !== 10){ skipped++; continue; }
           if(S.matricole.find(function(r){ return r.matricola===mat && r.ddt===ddt; })){ skipped++; continue; }
-          S.matricole.push({id:uid2(), matricola:mat, ddt:ddt, dataEntrata:oggi});
+          var nuovo = {id:uid2(), matricola:mat, ddt:ddt, dataEntrata:oggi};
+          S.matricole.push(nuovo);
+          nuoveDb.push(matricolaToDb(nuovo));
           nuove++;
         }
       }
-      matRender(); markUnsaved();
+      // Insert batch
+      if(nuoveDb.length){
+        for(var i=0; i<nuoveDb.length; i+=200){
+          var r = await supa.from('matricole').insert(nuoveDb.slice(i, i+200));
+          if(r.error) throw new Error('Insert: '+r.error.message);
+        }
+      }
+      matRender();
       alert('Importate '+nuove+' matricole.'+(skipped?' Saltate: '+skipped+'.':''));
       document.getElementById('mat-import-file').value='';
     } catch(e){ alert('Errore: '+e.message); }
