@@ -2969,6 +2969,25 @@ function matSegnaUscita(matricola, ddtCablotec, data){
   return null;
 }
 
+// Ordina i nomi DDT per anno crescente, poi per numero crescente.
+// Formato atteso: "numero-anno" (es. "65-2024", "470-2026", "0441-2026").
+// I nomi che non rispettano il formato vanno in fondo, ordinati alfabeticamente.
+function matSortCols(cols){
+  function parse(nome){
+    var m = /^(\d+)\s*-\s*(\d{4})$/.exec(nome.trim());
+    if(m) return {anno: parseInt(m[2]), num: parseInt(m[1]), valido: true};
+    return {anno: 999999, num: 0, valido: false};
+  }
+  return cols.slice().sort(function(a, b){
+    var pa = parse(a), pb = parse(b);
+    // Entrambi non validi → ordine alfabetico
+    if(!pa.valido && !pb.valido) return a < b ? -1 : a > b ? 1 : 0;
+    // Prima anno, poi numero
+    if(pa.anno !== pb.anno) return pa.anno - pb.anno;
+    return pa.num - pb.num;
+  });
+}
+
 function matRender(){
   var empty = document.getElementById('mat-empty');
   var table = document.getElementById('mat-main-table');
@@ -2980,11 +2999,12 @@ function matRender(){
   var searchEl = document.getElementById('mat-search');
   var q = searchEl ? searchEl.value.trim().toLowerCase() : '';
 
-  // Colonne = DDT distinti nell'ordine di inserimento
+  // Colonne = DDT distinti, ordinati per anno poi numero crescente
   var cols = [];
   S.matricole.forEach(function(r){
     if(r.ddt && cols.indexOf(r.ddt) === -1) cols.push(r.ddt);
   });
+  cols = matSortCols(cols);
 
   if(!cols.length){
     if(empty) empty.style.display = 'block';
@@ -3193,6 +3213,7 @@ function matExportXLSX(){
   if(!S.matricole.length){ alert('Nessuna matricola da esportare.'); return; }
   var cols = [];
   S.matricole.forEach(function(r){ if(r.ddt && cols.indexOf(r.ddt)===-1) cols.push(r.ddt); });
+  cols = matSortCols(cols);
   var colData = {};
   cols.forEach(function(c){ colData[c]=[]; });
   S.matricole.forEach(function(r){ if(colData[r.ddt]) colData[r.ddt].push(r.matricola); });
