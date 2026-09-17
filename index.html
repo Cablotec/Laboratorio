@@ -2044,22 +2044,36 @@ function ordineToDb(o){ return {id:o.id, rif:o.rif||'', data:o.data, cod_id:o.co
 function dbToMatricola(r){ return {id:r.id, matricola:r.matricola, ddt:r.ddt, dataEntrata:r.data_entrata||''}; }
 function matricolaToDb(m){ return {id:m.id, matricola:m.matricola, ddt:m.ddt, data_entrata:m.dataEntrata||null}; }
 
+// Legge TUTTE le righe di una tabella. PostgREST limita ogni select a 1000 righe
+// (db-max-rows) senza segnalare nulla: si pagina con .range() finche' una pagina
+// torna parziale.
+async function dbSelectAll(table){
+  var PAGE = 1000;
+  var out = [];
+  var from = 0;
+  while(true){
+    var res = await supa.from(table).select('*').order('id', {ascending:true}).range(from, from+PAGE-1);
+    if(res.error) throw res.error;
+    var rows = res.data || [];
+    out = out.concat(rows);
+    if(rows.length < PAGE) break;
+    from += PAGE;
+  }
+  return out;
+}
+
 // Carica tutto dalle 4 tabelle e popola S
 async function loadAllFromDb(){
-  var [cRes, mRes, oRes, matRes] = await Promise.all([
-    supa.from('codici').select('*'),
-    supa.from('movimenti').select('*'),
-    supa.from('ordini').select('*'),
-    supa.from('matricole').select('*')
+  var [cRows, mRows, oRows, matRows] = await Promise.all([
+    dbSelectAll('codici'),
+    dbSelectAll('movimenti'),
+    dbSelectAll('ordini'),
+    dbSelectAll('matricole')
   ]);
-  if(cRes.error) throw cRes.error;
-  if(mRes.error) throw mRes.error;
-  if(oRes.error) throw oRes.error;
-  if(matRes.error) throw matRes.error;
-  S.codici = cRes.data.map(dbToCodice);
-  S.movimenti = mRes.data.map(dbToMovimento);
-  S.ordini = oRes.data.map(dbToOrdine);
-  S.matricole = matRes.data.map(dbToMatricola);
+  S.codici = cRows.map(dbToCodice);
+  S.movimenti = mRows.map(dbToMovimento);
+  S.ordini = oRows.map(dbToOrdine);
+  S.matricole = matRows.map(dbToMatricola);
 }
 
 // Migrazione una-tantum: prende il blob vecchio (tabella 'magazzino') e popola le 4 tabelle
