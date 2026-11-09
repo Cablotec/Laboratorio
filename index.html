@@ -1707,18 +1707,18 @@ async function ordImportaExcel(file){
       // Colonna 0 = codice
       var codCol = 0;
 
-      // Raccogli colonne che contengono una Date in riga 1 E che hanno header riga 0 vuoto.
-      // Questo esclude colonne come "In JMA al:" (col C) che è una data di stato giacenza,
-      // non una data di ordine. Le vere colonne ordine hanno header riga 0 vuoto perché
-      // il mese ("Aprile"/"Maggio") è scritto nelle colonne aggregate (D/E/F).
+      // Raccogli tutte le colonne che contengono una Date in riga 1.
+      // L'header in riga 0 sopra una data è solo un'etichetta (es. "Coll Interno",
+      // "Armad+Sofi") e NON deve escludere la colonna. Si escludono solo le colonne
+      // di stato giacenza tipo "In JMA al:", che non sono date di ordine.
       var dateCols = [];
       for(var c = 0; c < dateRow.length; c++){
         if(!(dateRow[c] instanceof Date)) continue;
-        var hdr = headerRow[c];
-        if(hdr != null && String(hdr).trim() !== '') continue; // salta colonne etichettate
+        var hdr = headerRow[c] == null ? '' : String(headerRow[c]).trim().toLowerCase();
+        if(hdr.indexOf('jma') >= 0 || /\bal\s*:?$/.test(hdr)) continue; // colonna "In JMA al:"
         dateCols.push(c);
       }
-      if(!dateCols.length){ alert('Nessuna data ordine trovata nel foglio "'+sheetName+'" (cerco date in riga 2 con header riga 1 vuoto).'); fileInput.value=''; return; }
+      if(!dateCols.length){ alert('Nessuna data ordine trovata nel foglio "'+sheetName+'" (cerco date in riga 2).'); fileInput.value=''; return; }
 
       // Estrai (codice, data, qty) — partendo dalla riga 2 (i dati veri)
       var estratti = [];
